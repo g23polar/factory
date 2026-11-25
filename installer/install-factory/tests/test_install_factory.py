@@ -191,6 +191,12 @@ class FactoryV2Test(unittest.TestCase):
         self.assertIn("factory/bin/job spawn", text)
         self.assertIn("factory/bin/locked", text)
 
+    def test_skill_and_agents_md_document_qissue(self):
+        repo = make_repo()
+        install(repo)
+        self.assertIn("/factory qissue", (repo / ".claude/skills/factory/SKILL.md").read_text())
+        self.assertIn("qissue", (repo / "AGENTS.md").read_text())
+
     def test_detect_reports_orca(self):
         repo = make_repo()
         out = json.loads(run_installer("detect", str(repo)).stdout)
