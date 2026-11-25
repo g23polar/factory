@@ -92,11 +92,11 @@ Restart Claude Code in an Orca terminal on the repo's main checkout, label an is
 `factory`, and run:
 
 ```
-/factory run             # work through every open `factory` issue
-/factory run 42          # run one issue now
-/factory qissue 42       # make issue 42's small change straight on the base branch, no PR
-/factory qissue <text>   # file an issue from the text, then make it directly
-/factory <anything>      # ask about jobs, give feedback, or file a feature
+/factory run          # work through every open `factory` issue
+/factory run 42       # run one issue now
+/factory hack 42      # make issue 42's small change straight on the base branch, no PR
+/factory hack <text>  # file an issue from the text, then make it directly
+/factory <anything>   # ask about jobs, give feedback, or file a feature
 ```
 
 ### Initial configuration
@@ -118,9 +118,9 @@ them later in `factory/config.json`.
 
 One Claude Code session in your repo's main checkout is the **orchestrator**. It never
 writes code, specs or reviews itself, except for a quick change you start with
-`/factory qissue`, which it makes and pushes to the base branch directly. Each job gets a
-temporary git worktree (`.worktrees/<job-id>`), and every agent runs there as its own Claude Code session in its own
-Orca tab. You can open any agent's tab and talk to it.
+`/factory hack`, which it makes and pushes to the base branch directly. Each job gets a
+temporary git worktree (`.worktrees/<job-id>`), and every agent runs there as its own Claude
+Code session in its own Orca tab. You can open any agent's tab and talk to it.
 
 | Stage | Who | Output |
 |---|---|---|
@@ -141,7 +141,7 @@ A job gets at most `max_rounds` build → gate → review rounds before it goes 
 - **Your checks are the gate.** Code that fails `checks.sh` never reaches a reviewer.
 - **Risk-routed review.** Reviewers and models are chosen from intake's risk and surface rating.
 - **Policy-enforced merging.** A script, not an agent, decides whether a PR may auto-merge.
-- **Quick changes.** `/factory qissue` skips intake, spec, review and the PR, so the change
+- **Quick changes.** `/factory hack` skips intake, spec, review and the PR, so the change
   lands on the base branch unreviewed. Only you can start one, it must pass `checks.sh`, and
   branch protection refuses it like any direct push.
 - **Protected factory.** No job can change `factory/bin/`, `factory/tests/`, `checks.sh` or `config.json`.
