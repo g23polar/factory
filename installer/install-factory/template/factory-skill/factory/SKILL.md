@@ -98,8 +98,8 @@ TASK
 ```
 
 It opens the tab, prepends the job's header (`Job: <id>. Job folder: …`),
-appends the worker footer (ask the user in the tab, write your file, then
-`worker_done`), dispatches it, and records the dispatch in `job.json`. Pass
+appends the worker footer (ask the user in the tab after a `job notify`, write
+your file, then `worker_done`), dispatches it, and records the dispatch in `job.json`. Pass
 `--model` from `job.json` `agents` for the reviewers, and never for intake,
 spec-writer, builder or approver: their frontmatter sets it. A refusal means
 Orca or the agent file is missing: stop and tell the user.
@@ -157,7 +157,8 @@ Each message's task title is `<job-id> <tab>`.
 - `worker_done`: that agent finished. Read its file's first line as below and
   advance the job.
 - `escalation` (it stopped without `worker_done`): it is most likely waiting on
-  the user in its tab. Tell the user in one line which job and tab, and wait.
+  the user in its tab. Run `factory/bin/job notify <id> "<tab> stopped without worker_done"`,
+  tell the user in one line which job and tab, and wait.
   `exited` or `lost`: tell the user; respawn only if they say so.
 - `question` (an agent used `ask` despite its footer): answer only if it follows
   from the spec or the user's instructions; otherwise relay it to the user.
@@ -255,7 +256,8 @@ then moves the job to `merged`, which closes its tabs and removes its worktree.
 4. When nothing is queued or running, print `factory/bin/job summary <ids>`
    for the jobs this run touched, then list what waits on a human: PRs to
    review (merge one to approve it, or give feedback with `/factory`) and
-   questions waiting on authors.
+   questions waiting on authors. Then run
+   `factory/bin/job notify - "run settled: <n> jobs, <k> waiting on you"`.
 
 **Resuming.** State lives in files, so a new session picks up where a dead one
 stopped. For a `resume` job, run its stage's step again: `intake` and `spec`

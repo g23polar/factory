@@ -77,7 +77,8 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual(flags[:2], ["--permission-mode", "dontAsk"])
         allowed = flags[flags.index("--allowedTools") + 1:]
         self.assertEqual([a for a in allowed if a.startswith("Bash")],
-                         ["Bash(orca orchestration send --from * --type worker_done *)"])
+                         ["Bash(orca orchestration send --from * --type worker_done *)",
+                          f"Bash({self.mod.BIN}/job notify 004-dark-mode *)"])
         self.assertIn(f"Edit(/{self.mod.JOBS}/004-dark-mode/intake.md)", allowed)
         self.assertEqual(self.mod.agent_permissions(self.job(), "builder"),
                          ["--permission-mode", "bypassPermissions"])

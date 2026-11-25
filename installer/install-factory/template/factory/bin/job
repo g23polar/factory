@@ -18,6 +18,7 @@ Usage:
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
   job summary [<job>...]         table of jobs: issue, stage, PR, cost, time
+  job notify <job|-> <message>   macOS notification that someone is waiting on the user (- for no job)
 
 <job> is a job id (004-dark-mode) or an issue number (12).
 """
@@ -323,6 +324,34 @@ def label(kind, number, add=None, remove=None):
     gh(*args)
 
 
+def notify(title, message):
+    """Best effort macOS notification. Title and message go in as osascript's argv,
+    never into the script text: both can carry untrusted issue text."""
+    message = " ".join(message.split())
+    message = message[:237] + "..." if len(message) > 240 else message
+    script = ["-e", "on run argv", "-e",
+              "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run"]
+    try:
+        res = run(["osascript", *script, title, message], check=False)
+    except OSError as e:
+        print(f"job: couldn't notify: {e}", file=sys.stderr)
+        return
+    if res.returncode != 0:
+        print(f"job: couldn't notify: {(res.stderr or res.stdout).strip()}", file=sys.stderr)
+
+
+def notify_waiting(job):
+    """The job now waits on the user: needs-info or needs-human."""
+    d = job_dir(job["id"])
+    if job["stage"] == "needs-info":
+        title, why = "Factory: needs info", "intake needs more detail on the issue"
+    else:
+        title = "Factory: needs a human"
+        lines = (d / "decision.md").read_text().split("\n")[1:] if (d / "decision.md").exists() else []
+        why = next((l.strip() for l in lines if l.strip() and not l.startswith("#")), "see decision.md")
+    notify(title, f"#{job['issue']} {job['id']}: {why}")
+
+
 def assign(kind, number, login):
     """Best effort: GitHub refuses assignees without repo access, which must not block a move."""
     res = run(["gh", kind, "edit", str(number), "--add-assignee", login], check=False)
@@ -609,6 +638,8 @@ def advance(job, stage):
 
     job["stage"] = stage
     job["ended"] = now() if stage in TERMINAL | WAITING else None
+    if stage in WAITING:
+        notify_waiting(job)
     return job
 
 
@@ -682,14 +713,16 @@ def make_worktree(job):
 # worker. The user can open any tab and talk to it; the orchestrator only
 # hears `worker_done` (or an escalation) from Orca's mailbox.
 
-WORKER_FOOTER = (
-    "You run in your own Orca tab, and the user can read and answer you there. "
-    "This overrides the Orca brief above where they differ: if you need the user or "
-    "have a question, ask in this chat and wait for their reply; never use "
-    "`orca orchestration ask`, even though the brief says to. "
-    "Do your job exactly as your agent instructions say. "
-    "When your file is written, report worker_done with that file's first line as the summary."
-)
+def worker_footer(job, agent):
+    return (
+        "You run in your own Orca tab, and the user can read and answer you there. "
+        "This overrides the Orca brief above where they differ: if you need the user or "
+        "have a question, ask in this chat and wait for their reply; never use "
+        "`orca orchestration ask`, even though the brief says to. Right before you wait, "
+        f"notify the user with exactly `{BIN}/job notify {job['id']} \"{agent}: <your question, one line>\"`. "
+        "Do your job exactly as your agent instructions say. "
+        "When your file is written, report worker_done with that file's first line as the summary."
+    )
 
 
 def job_header(job):
@@ -727,7 +760,8 @@ def agent_permissions(job, agent):
     if agent == "intake":
         return ["--permission-mode", "dontAsk", "--allowedTools", "Read", "Grep", "Glob",
                 f"Edit(/{job_dir(job['id'])}/intake.md)",
-                "Bash(orca orchestration send --from * --type worker_done *)"]
+                "Bash(orca orchestration send --from * --type worker_done *)",
+                f"Bash({BIN}/job notify {job['id']} *)"]
     return ["--permission-mode", "bypassPermissions"]
 
 
@@ -748,7 +782,7 @@ def cmd_spawn(job, agent, model, task):
     handle = (term.get("terminal") or {}).get("handle")
     require(handle, "orca terminal create returned no handle")
     spec = job_dir(job["id"]) / f"task-{title.replace(' ', '-')}.md"
-    spec.write_text(f"{job_header(job)} {task.strip()}\n\n{WORKER_FOOTER}\n")
+    spec.write_text(f"{job_header(job)} {task.strip()}\n\n{worker_footer(job, agent)}\n")
     try:
         started = orca_strict("orchestration", "worker-start", "--worktree", f"path:{job['worktree']}",
                               "--terminal", handle, "--spec-file", str(spec), "--keep-open",
@@ -766,7 +800,7 @@ def cmd_spawn(job, agent, model, task):
 def cmd_send(job, agent, task):
     d = (job.get("dispatches") or {}).get(agent)
     require(d, f"{job['id']} has no {agent} worker; use `job spawn`")
-    body = f"{job_header(job)} {task.strip()}\n\n{WORKER_FOOTER}"
+    body = f"{job_header(job)} {task.strip()}\n\n{worker_footer(job, agent)}"
     sent = orca_strict("orchestration", "send", "--to", f"dispatch:{d['dispatch']}",
                        "--subject", f"{job['id']} round {job['round']}", "--body", body)
     # A finished worker takes it as a follow-up task with a new dispatch id; later sends go there.
@@ -953,6 +987,28 @@ def cmd_summary(args):
     print(f"total ${sum(j['cost_usd'] for j in jobs):.2f} (API-equivalent, factory agents only)")
 
 
+JOB_ID = re.compile(r"^\d{3}-[a-z0-9-]+$")
+
+
+def cmd_notify(target, message):
+    """Agents run this right before waiting on the user in their tab; the orchestrator
+    with `-`. It reads job.json directly, without the job's lock: a running
+    `advance` may hold it, and a notification must not wait on that."""
+    require(message.strip(), "empty message")
+    if target == "-":
+        notify("Factory", message)
+        return
+    if target.isdigit():
+        ids = [f.parent.name for f in sorted(JOBS.glob("*/job.json"))
+               if json.loads(f.read_text())["issue"] == int(target)]
+        require(ids, f"no job for issue #{target}")
+        job_id = ids[0]
+    else:
+        require(JOB_ID.match(target) and (job_dir(target) / "job.json").exists(), f"no job {target}")
+        job_id = target
+    notify(f"Factory: {job_id}", message)
+
+
 def main(argv):
     if not argv or argv[0] in {"-h", "--help"}:
         print(__doc__.strip())
@@ -986,6 +1042,8 @@ def main(argv):
             print(f"{job['id']}: {job['stage']} round {job['round']} gate {job['gate'] or '-'} {reviews}".rstrip())
         elif cmd == "summary":
             cmd_summary(args)
+        elif cmd == "notify" and len(args) == 2:
+            cmd_notify(*args)
         else:
             die(f"bad arguments: {' '.join(argv)}\n\n{__doc__.strip()}")
     except Refused as e:

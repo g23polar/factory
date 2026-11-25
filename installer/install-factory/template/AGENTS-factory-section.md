@@ -15,8 +15,10 @@ orchestrator. Each job's worktree is an Orca tab nested under it (stage and verd
 its status and comment, a `factory` pane running `factory/bin/job-watch`). Every factory
 agent runs there as its own Claude Code session (`claude --agent <name>`), dispatched by
 `factory/bin/job spawn` as an Orca orchestration worker: the user may open any agent's
-tab and talk to it. An agent that needs the user asks in its own tab and waits; it
-reports to the orchestrator only with `worker_done`. Nothing outside the factory builds
+tab and talk to it. An agent that needs the user runs `factory/bin/job notify <job>
+"<agent>: <question>"`, then asks in its own tab and waits; it reports to the
+orchestrator only with `worker_done`. Orca's own "agent needs input" alert is meant
+to be off: `job notify` and the needs-info/needs-human moves are the factory's alerts. Nothing outside the factory builds
 code or PRs here, except a quick change the user starts with `/factory hack`, which the
 orchestrator commits straight to the base branch after `checks.sh` passes.
 
