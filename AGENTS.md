@@ -19,7 +19,8 @@ agent runs there as its own Claude Code session (`claude --agent <name>`), dispa
 `factory/bin/job spawn` as an Orca orchestration worker: the user may open any agent's
 tab and talk to it. An agent that needs the user asks in its own tab and waits; it
 reports to the orchestrator only with `worker_done`. Nothing outside the factory builds
-code or PRs here.
+code or PRs here, except a quick change the user starts with `/factory qissue`, which the
+orchestrator commits straight to the base branch after `checks.sh` passes.
 
 Every checkout of this repo on the machine shares its test resources. Run anything that
 uses a shared one through `factory/bin/locked --max <seconds> <resource> <cmd>` (e.g.
