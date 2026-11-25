@@ -237,5 +237,13 @@ pipeline build it, or you can submit a pull request directly:
 
 ## Licensing
 
-A license has not been chosen yet. Until a `LICENSE` file is added, all rights are reserved
-by the authors.
+Licensed under the [GNU General Public License v3.0](LICENSE).
+
+This project is a modified derivative of the software factory in
+[zazencodes-season-3](https://github.com/zazencodes/zazencodes-season-3/tree/main/src/software-factory-claude-code-v2),
+which is also GPL-3.0. See [NOTICE](NOTICE) for attribution and a summary of the changes.
+
+The license covers this project's own code: the installer and the files it copies into
+your repository. Using the factory to build your project does not by itself place your
+project's code under the GPL. If your organization has a copyleft policy, check with them
+before adopting it.

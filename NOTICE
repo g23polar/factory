@@ -1,0 +1,21 @@
+factory
+Copyright (C) 2026 g23polar
+
+This project is a modified derivative of the software factory in
+zazencodes-season-3 (src/software-factory-claude-code-v2):
+https://github.com/zazencodes/zazencodes-season-3/tree/main/src/software-factory-claude-code-v2
+which is licensed under the GNU General Public License v3.0.
+
+Changes include, among others: an Orca-based worker model (each agent runs as its
+own session in its own tab), shared test-resource locks, a BUSY gate result, a
+script-enforced auto-merge policy, and a project-agnostic installer
+(installer/install-factory).
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See the LICENSE file for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.
