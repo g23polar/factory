@@ -9,6 +9,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -205,31 +206,41 @@ class LockedTest(unittest.TestCase):
     def hold(self, res, seconds):
         p = subprocess.Popen([str(BIN / "locked"), res, "sleep", str(seconds)], env=self.env)
         time.sleep(0.5)
+        kids = subprocess.run(["pgrep", "-P", str(p.pid)], capture_output=True, text=True).stdout.split()
+        self.addCleanup(self.release, p, [int(pid) for pid in kids])
         return p
+
+    def release(self, holder, kids):
+        holder.kill()
+        holder.wait()
+        for pid in kids:  # locked runs its command in a new session, so killing locked misses it
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def kill_pidfile(self, pidfile):
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     def test_runs_command_and_returns_its_exit_code(self):
         res = self.locked("pg", sys.executable, "-c", "print('hi'); raise SystemExit(3)")
         self.assertEqual((res.returncode, res.stdout.strip()), (3, "hi"))
 
     def test_busy_resource_exits_75_without_running(self):
-        holder = self.hold("sim", 5)
-        try:
-            res = self.locked("sim", "echo", "ran")
-            self.assertEqual(res.returncode, 75)
-            self.assertNotIn("ran", res.stdout)
-            self.assertIn("sim busy", res.stderr)
-            self.assertIn("sleep 5", res.stderr)  # says who holds it
-        finally:
-            holder.kill()
-            holder.wait()
+        self.hold("sim", 5)
+        res = self.locked("sim", "echo", "ran")
+        self.assertEqual(res.returncode, 75)
+        self.assertNotIn("ran", res.stdout)
+        self.assertIn("sim busy", res.stderr)
+        self.assertIn("sleep 5", res.stderr)  # says who holds it
 
     def test_resources_are_independent(self):
-        holder = self.hold("sim", 5)
-        try:
-            self.assertEqual(self.locked("pg", "true").returncode, 0)
-        finally:
-            holder.kill()
-            holder.wait()
+        self.hold("sim", 5)
+        self.assertEqual(self.locked("pg", "true").returncode, 0)
 
     def test_lock_is_released_when_the_holder_dies(self):
         holder = self.hold("pg", 30)
@@ -248,7 +259,9 @@ class LockedTest(unittest.TestCase):
         self.assertEqual(self.locked("pg", "true").returncode, 0)
 
     def test_lingering_grandchild_does_not_keep_the_lock(self):
-        res = self.locked("pg", "bash", "-c", "nohup sleep 20 >/dev/null 2>&1 & disown; exit 0")
+        pidfile = Path(self.dir) / "grandchild.pid"
+        self.addCleanup(self.kill_pidfile, pidfile)
+        res = self.locked("pg", "bash", "-c", f"nohup sleep 20 >/dev/null 2>&1 & echo $! > {pidfile}; disown; exit 0")
         self.assertEqual(res.returncode, 0)
         self.assertEqual(self.locked("pg", "true").returncode, 0)
 
