@@ -684,8 +684,10 @@ def make_worktree(job):
 
 WORKER_FOOTER = (
     "You run in your own Orca tab, and the user can read and answer you there. "
-    "If you need the user, ask in this chat and wait for their reply; never use "
-    "`orca orchestration ask`. Do your job exactly as your agent instructions say. "
+    "This overrides the Orca brief above where they differ: if you need the user or "
+    "have a question, ask in this chat and wait for their reply; never use "
+    "`orca orchestration ask`, even though the brief says to. "
+    "Do your job exactly as your agent instructions say. "
     "When your file is written, report worker_done with that file's first line as the summary."
 )
 

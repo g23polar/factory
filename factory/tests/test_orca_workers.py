@@ -68,6 +68,7 @@ class WorkerTest(unittest.TestCase):
         self.assertIn("Review round 2. Port: 5142.", task)
         self.assertIn("worker_done", task)
         self.assertIn("never use `orca orchestration ask`", task)
+        self.assertIn("overrides the Orca brief", task)
         self.assertEqual(self.saved()["dispatches"]["reviewer-ui"],
                          {"dispatch": "ctx_1", "terminal": "term_1", "title": "reviewer-ui r2"})
 
