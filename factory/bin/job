@@ -323,6 +323,14 @@ def label(kind, number, add=None, remove=None):
     gh(*args)
 
 
+def assign(kind, number, login):
+    """Best effort: GitHub refuses assignees without repo access, which must not block a move."""
+    res = run(["gh", kind, "edit", str(number), "--add-assignee", login], check=False)
+    if res.returncode != 0:
+        print(f"job: couldn't assign @{login} to {kind} #{number}: {(res.stderr or res.stdout).strip()}",
+              file=sys.stderr)
+
+
 # ---- Cost from Claude Code transcripts -------------------------------------
 
 
@@ -493,6 +501,7 @@ def advance(job, stage):
         comment("issue", job["issue"], f"{title}\n\n{intake_body()}")
         if stage == "needs-info":
             label("issue", job["issue"], add=LABELS["needs_info"])
+            assign("issue", job["issue"], fetch_issue(job["issue"])["author"]["login"])
         elif stage == "rejected":
             label("issue", job["issue"], remove=LABELS["queue"])
         else:
@@ -586,9 +595,11 @@ def advance(job, stage):
             if gh_json("pr", "view", str(job["pr"]), "--json", "isDraft")["isDraft"]:
                 gh("pr", "ready", str(job["pr"]))
             comment("pr", job["pr"], body)
+            assign("pr", job["pr"], operator())
         else:
             comment("issue", job["issue"], body)
         label("issue", job["issue"], add=LABELS["needs_human"])
+        assign("issue", job["issue"], operator())
 
     if stage in TERMINAL and Path(job["worktree"]).exists():
         if not orca("terminal", "close", "--worktree", f"path:{job['worktree']}", "--all"):
