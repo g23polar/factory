@@ -30,7 +30,8 @@ dispatched, as Orca orchestration workers, and how you are woken. You never call
 `orca` directly to start or manage agents or tabs: go through `factory/bin/job`
 (`spawn`, `send` and the rest), which records every dispatch in `job.json`. Your
 only direct calls are `orca orchestration run-current --json` (to learn the run
-id), the background waiter `orca orchestration check --run <run> --wait --json`,
+id), the background waiter
+`orca orchestration check --run <run> --wait --timeout-ms 3600000 --json`,
 and `orca orchestration check --run <run> --json` when a typed notice arrives
 (see **Waiting**).
 
@@ -119,10 +120,11 @@ builder told it is resuming.
 with `run_in_background`:
 
 ```bash
-orca orchestration check --run <run> --wait --json
+orca orchestration check --run <run> --wait --timeout-ms 3600000 --json
 ```
 
-Start it right after the spawn or send that puts the first agent out, and never
+The one-hour `--timeout-ms` is there because without it `check --wait` gives up
+after about two minutes. Start it right after the spawn or send that puts the first agent out, and never
 start a second one while one is running. Then end your turn with a one-line
 status. Never poll, never run watch scripts, never read an agent's terminal, and
 don't read the waiter's output until it exits.
@@ -136,10 +138,13 @@ waiters take over from there.
 When the waiter exits, its stdout JSON is the message batch; ignore the
 `_keepalive` lines on stderr. Handle each message as below. When the batch is
 handled (including any spawns or sends it causes), start a new waiter if any
-agent is still out, and none when nothing is out. If the waiter exits with an
-error or with no messages, start it again. After three such exits in a row with
-no message delivered, stop restarting it, tell the user in one line, and rely on
-typed notices.
+agent is still out, and none when nothing is out. If it exits with
+`"timedOut": true` and no messages, that is normal: start it again if any agent
+is still out; it is not a strike. If it exits with an error (non-zero exit, or
+`"ok": false` in the JSON), start it again and count it. After three errors in a
+row with no message delivered, stop restarting it, tell the user in one line,
+and rely on typed notices. A delivered message batch or a clean timeout breaks a
+run of errors.
 
 Orca may still type `You have N orchestration messages. Run `orca orchestration check --run <run>``
 when mail lands between waiters or before the first one. Treat it as a normal
