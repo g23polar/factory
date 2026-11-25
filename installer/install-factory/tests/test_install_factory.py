@@ -197,6 +197,14 @@ class FactoryV2Test(unittest.TestCase):
         self.assertIn("/factory hack", (repo / ".claude/skills/factory/SKILL.md").read_text())
         self.assertIn("/factory hack", (repo / "AGENTS.md").read_text())
 
+    def test_skill_documents_background_waiter(self):
+        repo = make_repo()
+        install(repo)
+        skill = (repo / ".claude/skills/factory/SKILL.md").read_text()
+        for text in ("orca orchestration check --run <run> --wait --json", "run_in_background",
+                     "orca orchestration run-current --json"):
+            self.assertIn(text, skill)
+
     def test_detect_reports_orca(self):
         repo = make_repo()
         out = json.loads(run_installer("detect", str(repo)).stdout)
