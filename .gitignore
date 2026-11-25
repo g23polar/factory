@@ -1,0 +1,5 @@
+.claude/
+CLAUDE.md
+/factory/jobs/
+/.worktrees/
+__pycache__/

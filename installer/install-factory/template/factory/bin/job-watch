@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Live view of one factory job, for its Orca `factory` pane (bin/job opens it).
+
+Usage:
+  job-watch <job-id>          redraw every 10s until the job finishes or its folder goes away
+  job-watch <job-id> --once   print once and exit
+
+Shows the job's stage line (the same text as its Orca tab comment), the PR,
+then the first line of each file the agents wrote. Read-only: it never
+changes job state.
+"""
+
+import importlib.machinery
+import importlib.util
+import json
+import sys
+import time
+from pathlib import Path
+
+BIN = Path(__file__).resolve().parent
+
+
+def load_job_module():
+    """bin/job, for its stage names and formatting, so the pane and tab never drift."""
+    loader = importlib.machinery.SourceFileLoader("factory_job", str(BIN / "job"))
+    spec = importlib.util.spec_from_loader("factory_job", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+J = load_job_module()
+
+
+def render(job_id):
+    d = J.job_dir(job_id)
+    job = json.loads((d / "job.json").read_text())
+    job.setdefault("round", 0)
+    job.setdefault("round_limit", J.CONFIG["max_rounds"])
+    lines = [f"#{job.get('issue')} {job.get('title', '')}  ({job_id})",
+             J.orca_comment(job) + (f" · PR #{job['pr']}" if job.get("pr") else ""), ""]
+    files = ["intake.md", "spec.md", "build.md", "decision.md"]
+    if job["round"]:
+        rd = f"round-{job['round']}"
+        files += [f"{rd}/checks.md"] + sorted(f"{rd}/{p.name}" for p in (d / rd).glob("review-*.md"))
+    for name in files:
+        line = J.first_line(d / name)
+        if line is not None:
+            lines.append(f"{name:<28} {(line or '(empty)')[:100]}")
+    return job.get("stage"), "\n".join(lines)
+
+
+def main(argv):
+    if not argv or argv[0].startswith("-"):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    job_id, once = argv[0], argv[1:] == ["--once"]
+    while True:
+        if not (J.job_dir(job_id) / "job.json").exists():
+            print(f"job-watch: no job {job_id} (finished and cleaned up, or deleted)")
+            return 0 if not once else 2
+        try:
+            stage, text = render(job_id)
+        except json.JSONDecodeError:
+            stage, text = None, "(job.json is being written; retrying)"
+        if not once:
+            print("\033[2J\033[H", end="")
+        print(text)
+        if once or stage in J.TERMINAL:
+            return 0
+        print(f"\n(updated {time.strftime('%H:%M:%S')}; refreshes every 10s)")
+        time.sleep(10)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Run a command while holding a machine-wide lock on a shared test resource.
+
+Usage:
+  locked [--max SECONDS] <resource> <cmd...>
+
+<resource> names one shared thing that two runs must not use at once, e.g. `pg`
+for a test database or `sim` for a simulator (lowercase letters, digits, dashes).
+AGENTS.md says which commands take which resource.
+
+Every checkout of the repo on this machine shares the lock: the main checkout,
+factory worktrees (.worktrees/<job>) and any other worktree alike, because the
+lock files live outside the repo, in $FACTORY_LOCK_DIR (default
+~/.local/share/factory-locks/<main checkout's folder name>).
+
+Waits up to $FACTORY_LOCK_WAIT seconds (default 600) for the lock, saying who holds
+it, then exits 75 without running the command. Otherwise the command runs with
+the lock held, in its own process group, and its exit code is returned.
+
+--max is the kill guard (default 900): past it the whole process group is
+killed and locked exits 124. Test runs can hang for hours, so keep --max near
+twice a normal run and never raise it to get around a hang.
+
+Only this process holds the lock (the command doesn't inherit it), so the lock
+is released when locked exits, even if something the command started lingers.
+Lock files are never deleted.
+"""
+
+import fcntl
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+RESOURCE = re.compile(r"[a-z][a-z0-9-]*\Z")
+BUSY = 75  # EX_TEMPFAIL
+TIMED_OUT = 124
+
+
+def holder(f):
+    f.seek(0)
+    return f.read().strip() or "unknown"
+
+
+def default_lock_dir():
+    """Per repo, shared by all its worktrees: named after the main checkout's folder.
+    git's common dir is the main checkout's .git from any worktree, so a copy of
+    this script run inside .worktrees/<job> finds the same locks."""
+    here = Path(__file__).resolve().parent
+    res = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                         cwd=here, capture_output=True, text=True)
+    main_checkout = Path(res.stdout.strip()).parent if res.returncode == 0 else here.parents[1]
+    return Path.home() / ".local/share/factory-locks" / main_checkout.name
+
+
+def usage():
+    print(__doc__.strip(), file=sys.stderr)
+    return 2
+
+
+def kill_group(child):
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def main(argv):
+    max_seconds = 900
+    if argv[:1] == ["--max"]:
+        if len(argv) < 2 or not argv[1].isdigit():
+            return usage()
+        max_seconds, argv = int(argv[1]), argv[2:]
+    if len(argv) < 2 or not RESOURCE.match(argv[0]):
+        return usage()
+    res, cmd = argv[0], argv[1:]
+    lock_dir = Path(os.environ.get("FACTORY_LOCK_DIR") or default_lock_dir())
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    wait = int(os.environ.get("FACTORY_LOCK_WAIT", "600"))
+
+    f = open(lock_dir / f"{res}.lock", "a+")
+    deadline = time.monotonic() + wait
+    announced = False
+    while True:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                print(f"locked: {res} busy for {wait}s, held by: {holder(f)}. "
+                      f"Not running `{' '.join(cmd)}`; try again later.", file=sys.stderr)
+                return BUSY
+            if not announced:
+                print(f"locked: waiting up to {wait}s for {res}, held by: {holder(f)}", file=sys.stderr)
+                announced = True
+            time.sleep(2)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    f.seek(0)
+    f.truncate()
+    f.write(f"pid {os.getpid()} since {stamp} in {os.getcwd()}: {' '.join(cmd)[:200]}\n")
+    f.flush()
+
+    try:
+        # close_fds (the default) keeps the lock out of the command's processes.
+        child = subprocess.Popen(cmd, start_new_session=True)
+    except OSError as e:
+        print(f"locked: can't run {cmd[0]}: {e}", file=sys.stderr)
+        return 127
+    # The command has its own process group, so pass on what would have reached it.
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda s, _frame: os.killpg(child.pid, s))
+    try:
+        code = child.wait(timeout=max_seconds)
+    except subprocess.TimeoutExpired:
+        print(f"locked: `{' '.join(cmd)}` exceeded {max_seconds}s; killing it", file=sys.stderr)
+        kill_group(child)
+        child.wait()
+        return TIMED_OUT
+    return code if code >= 0 else 128 - code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
