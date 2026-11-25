@@ -279,9 +279,14 @@ class InstallTest(unittest.TestCase):
         install(repo)
         install(repo, GOOD_ANSWERS, "--force")
         lines = (repo / ".gitignore").read_text().splitlines()
-        for entry in (".claude/", "CLAUDE.md", "/factory/jobs/", "/.worktrees/"):
+        for entry in (".claude", "CLAUDE.md", "/factory/jobs/", "/.worktrees/"):
             self.assertEqual(lines.count(entry), 1, entry)
         self.assertIn("node_modules/", lines)
+        # job create links each worktree's .claude to the main checkout's; git must ignore the link too
+        (repo / "wt").mkdir()
+        (repo / "wt" / ".claude").symlink_to(repo / ".claude")
+        res = subprocess.run(["git", "check-ignore", "-q", "wt/.claude"], cwd=repo)
+        self.assertEqual(res.returncode, 0)
 
     def test_agents_md_created_when_missing(self):
         repo = make_repo()

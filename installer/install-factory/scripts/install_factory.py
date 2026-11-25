@@ -62,7 +62,7 @@ LABELS = {
     "factory:needs-human": ("D93F0B", "Factory escalated this job to a human"),
 }
 
-GITIGNORE_LINES = [".claude/", "CLAUDE.md", "/factory/jobs/", "/.worktrees/"]
+GITIGNORE_LINES = [".claude", "CLAUDE.md", "/factory/jobs/", "/.worktrees/"]
 
 SKIP_DIRS = {"node_modules", ".venv", "venv", "build", "dist", "target", "DerivedData",
              "vendor", "factory", ".worktrees", "__pycache__", "Pods", "Carthage"}
