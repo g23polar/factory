@@ -20,10 +20,14 @@ tell the user; never work around it.
 
 ## Orca
 
-Orca is the user's view of the factory, nothing more. `factory/bin/job` mirrors
-every job's stage, round, gate and verdicts onto the job's Orca tab (its
-worktree) and opens a `factory` pane running `factory/bin/job-watch`. You never
-call Orca yourself, and never start Orca agents for a job.
+Orca is the user's view of the factory: `factory/bin/job` mirrors every job's
+stage, round, gate and verdicts onto the job's Orca tab (its worktree) and opens
+a `factory` pane running `factory/bin/job-watch`. Orca is also how agents are
+dispatched, as Orca orchestration workers, and how you are woken. You never call
+`orca` directly to start or manage agents or tabs: go through `factory/bin/job`
+(`spawn`, `send` and the rest), which records every dispatch in `job.json`. Your
+one direct call is `orca orchestration check --run <run>`, and only when Orca
+wakes you (see **Waiting**).
 
 ## The pipeline
 
