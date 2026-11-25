@@ -30,6 +30,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parents[1]
@@ -396,8 +397,13 @@ def verify(repo):
     ]
     out = {}
     for label, cmd in checks:
-        res = run(cmd, repo)
-        out[label] = "ok" if res.returncode == 0 else f"exit {res.returncode}: {(res.stderr or res.stdout).strip()[-300:]}"
+        # Files, not pipes: a process a check leaves behind can't keep verify() waiting for EOF.
+        with tempfile.TemporaryFile("w+") as stdout, tempfile.TemporaryFile("w+") as stderr:
+            code = subprocess.run(cmd, cwd=repo, stdout=stdout, stderr=stderr).returncode
+            stdout.seek(0)
+            stderr.seek(0)
+            err, text = stderr.read(), stdout.read()
+        out[label] = "ok" if code == 0 else f"exit {code}: {(err or text).strip()[-300:]}"
     return out
 
 

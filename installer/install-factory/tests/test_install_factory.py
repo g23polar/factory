@@ -3,11 +3,14 @@
 Run: python3 -m unittest discover -q -s ~/.claude/skills/install-factory/tests
 """
 
+import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -330,6 +333,35 @@ class InstallTest(unittest.TestCase):
         text = (repo / ".claude/agent-usage.md").read_text()
         self.assertIn("entry one", text)
         self.assertIn("Software factory installed", text)
+
+
+class VerifyTest(unittest.TestCase):
+    def test_a_stray_process_does_not_stall_verify(self):
+        repo = make_repo()
+        install(repo)
+        # A policy test that leaves a sleep behind holding the inherited stdout/stderr.
+        pidfile = repo / "stray.pid"
+        self.addCleanup(self.kill_pidfile, pidfile)
+        (repo / "factory/tests/test_stray.py").write_text(
+            "import subprocess\nimport unittest\n\n\n"
+            "class StrayTest(unittest.TestCase):\n"
+            "    def test_leaves_a_sleep_behind(self):\n"
+            f"        subprocess.run(['bash', '-c', 'sleep 30 & echo $! > {pidfile}'], check=True)\n")
+        spec = importlib.util.spec_from_file_location("install_factory", INSTALLER)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        start = time.monotonic()
+        out = mod.verify(repo)
+        self.assertLess(time.monotonic() - start, 15)
+        self.assertEqual(out["policy tests"], "ok")
+        self.assertTrue(pidfile.exists())  # the stray really ran
+
+    def kill_pidfile(self, pidfile):
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 if __name__ == "__main__":
