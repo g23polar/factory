@@ -93,7 +93,7 @@ It writes:
   bypass mode, except intake (`dontAsk`, allowed only to read, write `intake.md` and
   report `worker_done`), so these rules are their guard.
 - `AGENTS.md`: a "Software factory" section appended, or created if missing
-- `.gitignore`: `.claude/`, `CLAUDE.md`, `/factory/jobs/`, `/.worktrees/`, each added once
+- `.gitignore`: `.claude`, `CLAUDE.md`, `/factory/jobs/`, `/.worktrees/`, each added once
 - GitHub labels `factory`, `factory:needs-info` and `factory:needs-human`, unless `--no-labels`
 
 It then runs verification: the factory's policy tests, `bash -n` on `checks.sh`
