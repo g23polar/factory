@@ -29,8 +29,10 @@ a `factory` pane running `factory/bin/job-watch`. Orca is also how agents are
 dispatched, as Orca orchestration workers, and how you are woken. You never call
 `orca` directly to start or manage agents or tabs: go through `factory/bin/job`
 (`spawn`, `send` and the rest), which records every dispatch in `job.json`. Your
-one direct call is `orca orchestration check --run <run>`, and only when Orca
-wakes you (see **Waiting**).
+only direct calls are `orca orchestration run-current --json` (to learn the run
+id), the background waiter `orca orchestration check --run <run> --wait --json`,
+and `orca orchestration check --run <run> --json` when a typed notice arrives
+(see **Waiting**).
 
 ## The pipeline
 
@@ -112,10 +114,40 @@ TASK
 If `send` refuses (no builder dispatch, e.g. after a restart), spawn a new
 builder told it is resuming.
 
-**Waiting.** After spawning, end your turn with a one-line status. Never poll,
-never run watch scripts, never read an agent's terminal. Orca wakes you with
-`You have N orchestration messages. Run `orca orchestration check --run <run>``:
-run exactly that, with `--json`. Each message's task title is `<job-id> <tab>`.
+**Waiting.** An agent is out from its `spawn` or `send` until it reports
+`worker_done`. While any agent is out, keep exactly one waiter running, started
+with `run_in_background`:
+
+```bash
+orca orchestration check --run <run> --wait --json
+```
+
+Start it right after the spawn or send that puts the first agent out, and never
+start a second one while one is running. Then end your turn with a one-line
+status. Never poll, never run watch scripts, never read an agent's terminal, and
+don't read the waiter's output until it exits.
+
+`<run>` is the Run Orca binds to this session on the first `worker-start`. After
+the session's first `factory/bin/job spawn`, get it once with
+`orca orchestration run-current --json` and reuse it. If that fails or shows no
+Run, take the id from the first typed notice: the first wake is then typed, and
+waiters take over from there.
+
+When the waiter exits, its stdout JSON is the message batch; ignore the
+`_keepalive` lines on stderr. Handle each message as below. When the batch is
+handled (including any spawns or sends it causes), start a new waiter if any
+agent is still out, and none when nothing is out. If the waiter exits with an
+error or with no messages, start it again. After three such exits in a row with
+no message delivered, stop restarting it, tell the user in one line, and rely on
+typed notices.
+
+Orca may still type `You have N orchestration messages. Run `orca orchestration check --run <run>``
+when mail lands between waiters or before the first one. Treat it as a normal
+wake: run that check with `--json` and handle the messages the same way. Then
+make sure exactly one waiter is running if any agent is out; don't start a
+second one if one still runs.
+
+Each message's task title is `<job-id> <tab>`.
 
 - `worker_done`: that agent finished. Read its file's first line as below and
   advance the job.
@@ -164,7 +196,7 @@ gate's `round-<N-1>/checks.md`, the reviews in `round-<N-1>/`, or
   job, or something run by hand in an Orca terminal, was testing). Nothing was recorded and no round was
   spent: wait a few minutes in the background (`sleep` under a Monitor or
   `run_in_background`), then run the gate again. Tell the user if it stays
-  BUSY three times in a row.
+  BUSY three times in a row. This wait may run alongside the waiter.
 
 - PASS: `factory/bin/job advance <id> review` and go to **review**.
 - FAIL: `factory/bin/job advance <id> build`. If it refuses because this was the
@@ -229,6 +261,10 @@ gate; `review` spawns only the reviewers whose `review-<r>.md` is missing in
 the current round; `approve` respawns the approver; `merging` runs
 `factory/bin/job merge <id>`. A `needs-info` job the author has answered shows
 as `resume`: run `factory/bin/job advance <id> intake` and go to **intake**.
+A resumed or new session gets the run id as in **Waiting** and starts one
+waiter once it has an agent out. If agents from a dead session may still be
+out, first run `orca orchestration check --run <run> --json` once to collect
+mail they already sent.
 
 ## /factory run <n>
 
