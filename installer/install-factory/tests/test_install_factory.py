@@ -211,10 +211,18 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(out["verify"], {"policy tests": "ok", "checks.sh syntax": "ok", "job summary": "ok"})
         for rel in ("factory/bin/job", "factory/bin/gate", "factory/bin/route", "factory/dashboard.html",
                     "factory/checks.sh", "factory/config.json", "factory/install.json",
-                    ".claude/skills/factory/SKILL.md", ".claude/agent-usage.md"):
+                    ".claude/skills/factory/SKILL.md", ".claude/skills/catchup/SKILL.md",
+                    ".claude/agent-usage.md"):
             self.assertTrue((repo / rel).exists(), rel)
         self.assertTrue(os.access(repo / "factory/bin/job", os.X_OK))
         self.assertTrue(os.access(repo / "factory/checks.sh", os.X_OK))
+
+    def test_installs_catchup_skill_as_read_only_digest(self):
+        repo = make_repo()
+        install(repo)
+        text = (repo / ".claude/skills/catchup/SKILL.md").read_text()
+        self.assertTrue(text.startswith("---\nname: catchup\n"))
+        self.assertIn("You\nchange nothing", text)
 
     def test_installs_all_eight_factory_agents_and_no_project_agents(self):
         repo = make_repo()

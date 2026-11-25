@@ -326,9 +326,10 @@ def copy_agents(repo, project_line):
             text = text.replace("{{PROJECT_LINE}}", project_line.strip())
         assert "{{" not in text, f"unfilled placeholder in {name}.md"
         (adir / f"{name}.md").write_text(text)
-    skill_dir = repo / ".claude" / "skills" / "factory"
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(TEMPLATE / "factory-skill" / "factory" / "SKILL.md", skill_dir / "SKILL.md")
+    for skill in ("factory", "catchup"):
+        skill_dir = repo / ".claude" / "skills" / skill
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(TEMPLATE / "factory-skill" / skill / "SKILL.md", skill_dir / "SKILL.md")
 
 
 def ensure_agents_section(repo):
@@ -435,7 +436,7 @@ def cmd_install(args):
         "written": ["factory/bin/{job,gate,route,locked,job-watch}", "factory/dashboard.html", "factory/tests/",
                     "factory/config.json", "factory/checks.sh", "factory/install.json",
                     ".claude/agents/ (8 factory agents)", ".claude/skills/factory/SKILL.md",
-                    ".claude/agent-usage.md", ".claude/settings.local.json (deny rules)"],
+                    ".claude/skills/catchup/SKILL.md", ".claude/agent-usage.md", ".claude/settings.local.json (deny rules)"],
         "deny_rules_added": deny_added,
         "AGENTS.md": agents_md,
         "gitignore_added": added_ignores,

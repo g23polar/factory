@@ -87,6 +87,7 @@ It writes:
 - `.claude/agents/`: the 8 factory agents (`intake`, `spec-writer`, `builder`,
   `approver`, `reviewer-code`, `reviewer-security`, `reviewer-ux`, `reviewer-ui`)
 - `.claude/skills/factory/SKILL.md`, the `/factory` orchestrator
+- `.claude/skills/catchup/SKILL.md`, `/catchup`: a read-only digest of overnight factory activity
 - `.claude/agent-usage.md`: the log, created or appended to
 - `.claude/settings.local.json`: baseline deny rules for `rm`, `rmdir`, `unlink` and
   `find -delete`, merged in (never removed). Agents run as their own sessions in
