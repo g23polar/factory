@@ -204,8 +204,8 @@ class FactoryV2Test(unittest.TestCase):
         repo = make_repo()
         install(repo)
         skill = (repo / ".claude/skills/factory/SKILL.md").read_text()
-        for text in ("orca orchestration check --run <run> --wait --json", "run_in_background",
-                     "orca orchestration run-current --json"):
+        for text in ("orca orchestration check --run <run> --wait --timeout-ms 3600000 --json",
+                     "run_in_background", "orca orchestration run-current --json", "timedOut"):
             self.assertIn(text, skill)
 
     def test_detect_reports_orca(self):
