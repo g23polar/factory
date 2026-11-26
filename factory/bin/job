@@ -354,6 +354,13 @@ def label(kind, number, add=None, remove=None):
     gh(*args)
 
 
+def unlabel_needs_human(job):
+    """The job no longer waits on the user: drop the label from its issue and PR."""
+    label("issue", job["issue"], remove=LABELS["needs_human"])
+    if job["pr"]:
+        label("pr", job["pr"], remove=LABELS["needs_human"])
+
+
 def notify(title, message):
     """Best effort macOS notification. Title and message go in as osascript's argv,
     never into the script text: both can carry untrusted issue text."""
@@ -537,7 +544,7 @@ def advance(job, stage):
     if stage == "merged":
         require(job["pr"] and pr_state(job) == "MERGED", "the PR isn't merged")
         if old == "needs-human":
-            label("issue", job["issue"], remove=LABELS["needs_human"])
+            unlabel_needs_human(job)
 
     elif stage == "rejected" and old in WAITING:
         require((d / "rejection.md").exists(), "use `job reject` to reject a waiting job")
@@ -546,6 +553,8 @@ def advance(job, stage):
         waiting = LABELS["needs_info"] if old == "needs-info" else LABELS["needs_human"]
         label("issue", job["issue"], remove=f"{LABELS['queue']},{waiting}")
         if job["pr"]:
+            if old == "needs-human":
+                label("pr", job["pr"], remove=LABELS["needs_human"])
             gh("pr", "close", str(job["pr"]))
             run(["git", "push", "origin", "--delete", job["branch"]], check=False)
 
@@ -649,7 +658,7 @@ def advance(job, stage):
                 "use `job feedback` to send a job back to the builder")
         job["round_limit"] = job["round"] + CONFIG["max_rounds"]
         next_round(job)
-        label("issue", job["issue"], remove=LABELS["needs_human"])
+        unlabel_needs_human(job)
 
     if stage == "needs-human":
         body = f"### Factory: needs a human\n\n{(d / 'decision.md').read_text().split(chr(10), 1)[1].strip()}"
@@ -662,6 +671,8 @@ def advance(job, stage):
             comment("issue", job["issue"], body)
         label("issue", job["issue"], add=LABELS["needs_human"])
         assign("issue", job["issue"], operator())
+        if job["pr"]:
+            label("pr", job["pr"], add=LABELS["needs_human"])
 
     if stage in TERMINAL and Path(job["worktree"]).exists():
         if not orca("terminal", "close", "--worktree", f"path:{job['worktree']}", "--all"):

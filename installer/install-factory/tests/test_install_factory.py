@@ -152,7 +152,7 @@ class FactoryV2Test(unittest.TestCase):
         install(repo)
         for name in ("locked", "job-watch", "job-diff"):
             self.assertTrue(os.access(repo / "factory/bin" / name, os.X_OK), name)
-        for name in ("test_orca_view.py", "test_orca_workers.py", "test_blockers.py", "test_job_diff.py"):
+        for name in ("test_orca_view.py", "test_orca_workers.py", "test_blockers.py", "test_job_diff.py", "test_pr_label.py"):
             self.assertTrue((repo / "factory/tests" / name).exists(), name)
 
     def test_reviewers_and_approver_read_the_diff_from_job_diff(self):
