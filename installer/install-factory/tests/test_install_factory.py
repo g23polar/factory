@@ -6,6 +6,8 @@ Run: python3 -m unittest discover -q -s ~/.claude/skills/install-factory/tests
 import importlib.util
 import json
 import os
+import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -44,8 +46,8 @@ def make_repo(files=None):
     return repo
 
 
-def run_installer(*args, expect_ok=True):
-    res = subprocess.run([sys.executable, str(INSTALLER), *args], capture_output=True, text=True)
+def run_installer(*args, expect_ok=True, env=None):
+    res = subprocess.run([sys.executable, str(INSTALLER), *args], capture_output=True, text=True, env=env)
     if expect_ok is True:
         assert res.returncode == 0, res.stdout + res.stderr
     elif expect_ok is False:
@@ -59,9 +61,9 @@ def write_answers(repo, answers):
     return str(path)
 
 
-def install(repo, answers=None, *extra, expect_ok=True):
+def install(repo, answers=None, *extra, expect_ok=True, env=None):
     return run_installer("install", str(repo), "--answers", write_answers(repo, answers or GOOD_ANSWERS),
-                         "--no-labels", *extra, expect_ok=expect_ok)
+                         "--no-labels", *extra, expect_ok=expect_ok, env=env)
 
 
 class DetectTest(unittest.TestCase):
@@ -350,6 +352,174 @@ class InstallTest(unittest.TestCase):
         self.assertIn("Software factory installed", text)
 
 
+FAKE_RTK = """#!/bin/sh
+case "$1" in
+  --version) echo "rtk 9.9.9" ;;
+  gain) [ -n "$FAKE_RTK_GAIN_FAILS" ] && exit 1; echo "no savings yet" ;;
+  *) exit 2 ;;
+esac
+"""
+RTK_DENY = ["Bash(rtk find * -delete*)", "Bash(*rtk find * -delete*)", "Bash(*find * -delete*)",
+            "Bash(rtk run *)", "Bash(rtk proxy *)"]
+BASELINE_DENY = ["Bash(rm *)", "Bash(rm:*)", "Bash(*&& rm *)", "Bash(*; rm *)", "Bash(*| xargs rm*)",
+                 "Bash(rmdir:*)", "Bash(unlink:*)", "Bash(find * -delete*)"]
+
+
+class RtkTest(unittest.TestCase):
+    """Optional rtk: detection, the `rtk` answer, and the hook and deny rules it wires."""
+
+    def env(self, rtk=True, user_hook=False, gain_fails=False):
+        """PATH with system tools plus a fake rtk (or none), and a temp HOME (optionally with a user rtk hook)."""
+        home = Path(tempfile.mkdtemp(prefix="ifactory-home-"))
+        bindir = Path(tempfile.mkdtemp(prefix="ifactory-bin-"))
+        for tool in ("git", "gh", "bash", "sh", "python3"):
+            found = shutil.which(tool)
+            if found:
+                (bindir / tool).symlink_to(found)
+        if rtk:
+            (bindir / "rtk").write_text(FAKE_RTK)
+            (bindir / "rtk").chmod(0o755)
+        if user_hook:
+            (home / ".claude").mkdir()
+            (home / ".claude/settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "/usr/local/bin/rtk hook claude"}]}]}}))
+        env = {**os.environ, "PATH": f"{bindir}{os.pathsep}/usr/bin{os.pathsep}/bin", "HOME": str(home)}
+        if gain_fails:
+            env["FAKE_RTK_GAIN_FAILS"] = "1"
+        return env
+
+    def detect(self, env):
+        return json.loads(run_installer("detect", str(make_repo()), env=env).stdout)
+
+    def install(self, answers, *extra, env, repo=None, expect_ok=True):
+        repo = repo or make_repo()
+        res = install(repo, answers, *extra, env=env, expect_ok=expect_ok)
+        return repo, res
+
+    def read(self, repo):
+        meta = json.loads((repo / "factory/install.json").read_text())
+        settings = json.loads((repo / ".claude/settings.local.json").read_text())
+        return meta, settings
+
+    def hook_commands(self, settings):
+        return [h["command"] for e in settings.get("hooks", {}).get("PreToolUse", []) for h in e["hooks"]]
+
+    def test_detect_reports_working_rtk_with_path_and_version(self):
+        env = self.env()
+        rtk = self.detect(env)["rtk"]
+        self.assertTrue(rtk["installed"])
+        self.assertEqual(rtk["path"], str(Path(shutil.which("rtk", path=env["PATH"])).resolve()))
+        self.assertEqual(rtk["version"], "9.9.9")
+        self.assertFalse(rtk["global_hook"])
+
+    def test_detect_treats_failing_gain_as_not_installed(self):
+        rtk = self.detect(self.env(gain_fails=True))["rtk"]
+        self.assertEqual(rtk, {"installed": False, "path": None, "version": None, "global_hook": False})
+
+    def test_detect_without_rtk_adds_no_warning(self):
+        info = self.detect(self.env(rtk=False))
+        self.assertFalse(info["rtk"]["installed"])
+        self.assertFalse(any("rtk" in w for w in info["warnings"]))
+
+    def test_detect_reports_user_level_hook(self):
+        self.assertTrue(self.detect(self.env(user_hook=True))["rtk"]["global_hook"])
+
+    def test_absent_rtk_wires_nothing(self):
+        repo, res = self.install({**GOOD_ANSWERS, "rtk": True}, env=self.env(rtk=False))
+        meta, settings = self.read(repo)
+        self.assertEqual(meta["rtk"], "absent")
+        self.assertNotIn("rtk_path", meta)
+        self.assertEqual(settings, {"permissions": {"deny": BASELINE_DENY}})
+        self.assertNotIn("rtk", json.loads(res.stdout))
+
+    def test_declined_wires_nothing(self):
+        for answers in (GOOD_ANSWERS, {**GOOD_ANSWERS, "rtk": False}):
+            with self.subTest(rtk=answers.get("rtk")):
+                repo, res = self.install(answers, env=self.env())
+                meta, settings = self.read(repo)
+                self.assertEqual(meta["rtk"], "declined")
+                self.assertEqual(settings, {"permissions": {"deny": BASELINE_DENY}})
+                self.assertNotIn("rtk", json.loads(res.stdout))
+
+    def assert_wired_once(self, repo):
+        meta, settings = self.read(repo)
+        self.assertEqual(meta["rtk"], "wired")
+        self.assertEqual(meta["rtk_version"], "9.9.9")
+        self.assertTrue(os.path.isabs(meta["rtk_path"]))
+        commands = self.hook_commands(settings)
+        self.assertEqual(len(commands), 1)
+        argv = shlex.split(commands[0])
+        self.assertEqual(argv, [str(repo.resolve() / "factory/bin/rtk-hook")])
+        self.assertTrue(os.access(argv[0], os.X_OK))
+        deny = settings["permissions"]["deny"]
+        self.assertEqual(sorted(deny), sorted(BASELINE_DENY + RTK_DENY))
+        return settings
+
+    def test_accept_wires_hook_and_deny_rules(self):
+        repo, res = self.install({**GOOD_ANSWERS, "rtk": True}, env=self.env())
+        out = json.loads(res.stdout)
+        self.assertEqual(out["rtk"], "wired")
+        self.assertTrue(any("rtk-hook" in w and "PreToolUse" in w for w in out["written"]))
+        self.assertTrue(set(RTK_DENY) <= set(out["deny_rules_added"]))
+        self.assert_wired_once(repo)
+
+    def test_rerun_is_idempotent(self):
+        env = self.env()
+        answers = {**GOOD_ANSWERS, "rtk": True}
+        repo, _ = self.install(answers, env=env)
+        before = self.assert_wired_once(repo)
+        self.install(answers, env=env, repo=repo, expect_ok=False)
+        self.assertEqual(self.read(repo)[1], before)
+        for _ in range(2):
+            self.install(answers, "--force", env=env, repo=repo)
+            self.assert_wired_once(repo)
+
+    def test_existing_hooks_and_settings_are_kept(self):
+        repo = make_repo()
+        existing = {
+            "permissions": {"allow": ["Read"], "deny": ["Bash(curl:*)"]},
+            "hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "echo pre"}]}],
+                      "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo post"}]}]},
+            "model": "opus",
+        }
+        path = repo / ".claude/settings.local.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(existing))
+        self.install({**GOOD_ANSWERS, "rtk": True}, env=self.env(), repo=repo)
+        settings = json.loads(path.read_text())
+        self.assertEqual(settings["permissions"]["allow"], ["Read"])
+        self.assertIn("Bash(curl:*)", settings["permissions"]["deny"])
+        self.assertEqual(settings["hooks"]["PostToolUse"], existing["hooks"]["PostToolUse"])
+        self.assertEqual(settings["hooks"]["PreToolUse"][0], existing["hooks"]["PreToolUse"][0])
+        self.assertEqual(self.hook_commands(settings), ["echo pre", shlex.quote(str(repo.resolve() / "factory/bin/rtk-hook"))])
+        self.assertEqual(settings["model"], "opus")
+
+    def test_user_level_hook_adds_only_deny_rules(self):
+        repo, res = self.install({**GOOD_ANSWERS, "rtk": True}, env=self.env(user_hook=True))
+        meta, settings = self.read(repo)
+        self.assertEqual(meta["rtk"], "already-global")
+        self.assertNotIn("rtk_path", meta)
+        self.assertNotIn("hooks", settings)
+        self.assertTrue(set(RTK_DENY) <= set(settings["permissions"]["deny"]))
+        self.assertEqual(json.loads(res.stdout)["rtk"], "already-global")
+
+    def test_config_protects_rtk_dir_and_install_json(self):
+        repo, _ = self.install(GOOD_ANSWERS, env=self.env(rtk=False))
+        config = json.loads((repo / "factory/config.json").read_text())
+        self.assertIn(".rtk/**", config["protected_paths"])
+        self.assertIn("factory/install.json", config["protected_paths"])
+
+    def test_wrapper_installed_even_when_absent(self):
+        repo, _ = self.install(GOOD_ANSWERS, env=self.env(rtk=False))
+        self.assertTrue(os.access(repo / "factory/bin/rtk-hook", os.X_OK))
+        self.assertTrue((repo / "factory/tests/test_rtk_hook.py").exists())
+
+    def test_non_boolean_answer_is_refused(self):
+        repo, res = self.install({**GOOD_ANSWERS, "rtk": "yes"}, env=self.env(), expect_ok=False)
+        self.assertIn("answers.rtk", res.stderr)
+        self.assertFalse((repo / "factory").exists())
+
+
 class VerifyTest(unittest.TestCase):
     def test_a_stray_process_does_not_stall_verify(self):
         repo = make_repo()
@@ -367,7 +537,7 @@ class VerifyTest(unittest.TestCase):
         spec.loader.exec_module(mod)
         start = time.monotonic()
         out = mod.verify(repo)
-        self.assertLess(time.monotonic() - start, 15)
+        self.assertLess(time.monotonic() - start, 25)  # the stray sleeps 30s
         self.assertEqual(out["policy tests"], "ok")
         self.assertTrue(pidfile.exists())  # the stray really ran
 

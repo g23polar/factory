@@ -15,7 +15,8 @@
           "concurrency":   int,                                               # optional, default 1
           "max_rounds":    int,                                               # optional, default 3
           "max_risk":      "low" | "medium" | "high",                         # optional, default "low"
-          "escalate_paths": [str, ...]                                        # optional, default []
+          "escalate_paths": [str, ...],                                       # optional, default []
+          "rtk":           bool                                               # optional, default false
         }
 
 Refuses a repo that already has factory/ unless --force, which rewrites the factory
@@ -42,6 +43,10 @@ INSTALLER_VERSION = "2.0"
 # project's deny rules are their guard. Merged into .claude/settings.local.json; never removed.
 DENY_RULES = ["Bash(rm *)", "Bash(rm:*)", "Bash(*&& rm *)", "Bash(*; rm *)", "Bash(*| xargs rm*)",
               "Bash(rmdir:*)", "Bash(unlink:*)", "Bash(find * -delete*)"]
+# Added with the rtk hook (or a user-level one): keep rtk's own deletes and its raw-exec escapes out.
+RTK_DENY_RULES = ["Bash(rtk find * -delete*)", "Bash(*rtk find * -delete*)", "Bash(*find * -delete*)",
+                  "Bash(rtk run *)", "Bash(rtk proxy *)"]
+RTK_TIMEOUT = 10
 LOCK_NAME = re.compile(r"[a-z][a-z0-9-]*\Z")
 
 # Prices copied from the reference factory's config.json, dated 2026-11-24. Update when they change.
@@ -158,6 +163,49 @@ def stack_checks(repo):
     return stacks, checks, needs_input
 
 
+# ---------- rtk ----------
+
+def detect_rtk():
+    """(absolute path, version) when rtk is on PATH and both `--version` and `gain` exit 0; else None."""
+    found = shutil.which("rtk")
+    if not found:
+        return None
+    path = str(Path(found).resolve())
+    outputs = []
+    for args in (["--version"], ["gain"]):
+        try:
+            res = subprocess.run([path, *args], capture_output=True, text=True, timeout=RTK_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if res.returncode != 0:
+            return None
+        outputs.append(res.stdout)
+    tokens = outputs[0].split()
+    return path, tokens[-1] if tokens else None
+
+
+def is_rtk_hook(command):
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return any(Path(w).name == "rtk" and words[i + 1:i + 3] == ["hook", "claude"] for i, w in enumerate(words))
+
+
+def global_rtk_hook():
+    """True when ~/.claude/settings{,.local}.json has a PreToolUse hook running `rtk hook claude`."""
+    for name in ("settings.json", "settings.local.json"):
+        try:
+            settings = json.loads((Path.home() / ".claude" / name).read_text())
+            entries = settings.get("hooks", {}).get("PreToolUse", [])
+            commands = [h.get("command", "") for e in entries for h in e.get("hooks", [])]
+        except (OSError, ValueError, AttributeError, TypeError):
+            continue
+        if any(isinstance(c, str) and is_rtk_hook(c) for c in commands):
+            return True
+    return False
+
+
 # ---------- detect ----------
 
 def cmd_detect(args):
@@ -190,12 +238,15 @@ def cmd_detect(args):
             warnings.append("Orca is installed but not running: factory agents run as Orca workers; open Orca")
     else:
         warnings.append("`orca` CLI not found: factory agents run as Orca workers, so install Orca first")
+    rtk = detect_rtk()
     print(json.dumps({
         "repo": str(repo),
         "is_git": git,
         "origin": origin or None,
         "gh_authenticated": gh_ok,
         "orca": {"installed": bool(shutil.which("orca")), "running": orca_running},
+        "rtk": {"installed": rtk is not None, "path": rtk and rtk[0], "version": rtk and rtk[1],
+                "global_hook": global_rtk_hook()},
         "base_branch": default_branch(repo) if git else "main",
         "existing_factory": (repo / "factory").exists(),
         "agents_md": (repo / "AGENTS.md").exists(),
@@ -224,6 +275,8 @@ def validate_answers(answers):
         die("answers.project_line is required (one sentence on what the project is)")
     if answers.get("max_risk", "low") not in ("low", "medium", "high"):
         die("answers.max_risk must be low, medium or high")
+    if not isinstance(answers.get("rtk", False), bool):
+        die("answers.rtk must be true or false")
 
 
 def checks_sh(checks, base_branch):
@@ -293,7 +346,8 @@ def write_config(answers, base_branch):
         "labels": {"queue": "factory", "needs_info": "factory:needs-info", "needs_human": "factory:needs-human"},
         "routing": {"low": {"code": "opus"}, "medium": {"code": "opus"}, "high": {"code": "opus"}},
         "surface_reviewers": {"ui": {"ux": "sonnet", "ui": "opus"}, "security": {"security": "opus"}},
-        "protected_paths": ["factory/checks.sh", "factory/config.json", "factory/bin/*", "factory/tests/*"],
+        "protected_paths": ["factory/checks.sh", "factory/config.json", "factory/bin/*", "factory/tests/*",
+                            "factory/install.json", ".rtk/**"],
         "ports": {"base": 5100, "step": 10},
         "prices_usd_per_mtok": PRICES,
         "auto_merge": {
@@ -307,7 +361,7 @@ def write_config(answers, base_branch):
 
 def copy_factory_files(repo, force):
     fdir = repo / "factory"
-    for name in ("job", "gate", "route", "locked", "job-watch", "job-diff"):
+    for name in ("job", "gate", "route", "locked", "job-watch", "job-diff", "rtk-hook"):
         dst = fdir / "bin" / name
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(TEMPLATE / "factory" / "bin" / name, dst)
@@ -346,16 +400,41 @@ def ensure_agents_section(repo):
     return "created"
 
 
-def ensure_deny_rules(repo):
-    """Merge the baseline deny rules into .claude/settings.local.json; returns those added."""
+def ensure_deny_rules(repo, rules=DENY_RULES):
+    """Merge deny rules into .claude/settings.local.json; returns those added."""
     path = repo / ".claude" / "settings.local.json"
     settings = json.loads(path.read_text()) if path.exists() else {}
     deny = settings.setdefault("permissions", {}).setdefault("deny", [])
-    added = [r for r in DENY_RULES if r not in deny]
+    added = [r for r in rules if r not in deny]
     deny.extend(added)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2) + "\n")
     return added
+
+
+def ensure_rtk_hook(repo):
+    """Merge the PreToolUse entry running factory/bin/rtk-hook; never adds it twice, never removes one."""
+    path = repo / ".claude" / "settings.local.json"
+    settings = json.loads(path.read_text()) if path.exists() else {}
+    command = shlex.quote(str(repo / "factory" / "bin" / "rtk-hook"))
+    entries = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
+    if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
+        entries.append({"matcher": "Bash", "hooks": [{"type": "command", "command": command}]})
+    path.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+def wire_rtk(repo, answer):
+    """Returns (status, rtk path and version or None, rtk deny rules added)."""
+    rtk = detect_rtk()
+    if rtk is None:
+        return "absent", None, []
+    if not answer:
+        return "declined", None, []
+    added = ensure_deny_rules(repo, RTK_DENY_RULES)
+    if global_rtk_hook():
+        return "already-global", None, added
+    ensure_rtk_hook(repo)
+    return "wired", rtk, added
 
 
 def ensure_gitignore(repo):
@@ -425,10 +504,14 @@ def cmd_install(args):
     checks_path.chmod(0o755)
     copy_agents(repo, answers["project_line"])
     deny_added = ensure_deny_rules(repo)
+    rtk_status, rtk, rtk_deny_added = wire_rtk(repo, answers.get("rtk", False))
+    deny_added += rtk_deny_added
     agents_md = ensure_agents_section(repo)
     added_ignores = ensure_gitignore(repo)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-    install_meta = {"source": SOURCE, "installer": INSTALLER_VERSION, "installed_at": stamp}
+    install_meta = {"source": SOURCE, "installer": INSTALLER_VERSION, "installed_at": stamp, "rtk": rtk_status}
+    if rtk_status == "wired":
+        install_meta.update(rtk_path=rtk[0], rtk_version=rtk[1])
     (repo / "factory" / "install.json").write_text(json.dumps(install_meta, indent=2) + "\n")
 
     labels = "skipped (--no-labels)" if args.no_labels else create_labels(repo)
@@ -437,12 +520,15 @@ def cmd_install(args):
               f"jobs kept: {keep_jobs}; verify: {checks_result}"
     ensure_agent_log(repo, stamp, summary)
 
-    print(json.dumps({
+    written = ["factory/bin/{job,gate,route,locked,job-watch,job-diff,rtk-hook}", "factory/dashboard.html",
+               "factory/tests/", "factory/config.json", "factory/checks.sh", "factory/install.json",
+               ".claude/agents/ (8 factory agents)", ".claude/skills/factory/SKILL.md",
+               ".claude/skills/catchup/SKILL.md", ".claude/agent-usage.md", ".claude/settings.local.json (deny rules)"]
+    if rtk_status == "wired":
+        written.append(".claude/settings.local.json (PreToolUse hook factory/bin/rtk-hook)")
+    result = {
         "repo": str(repo),
-        "written": ["factory/bin/{job,gate,route,locked,job-watch,job-diff}", "factory/dashboard.html", "factory/tests/",
-                    "factory/config.json", "factory/checks.sh", "factory/install.json",
-                    ".claude/agents/ (8 factory agents)", ".claude/skills/factory/SKILL.md",
-                    ".claude/skills/catchup/SKILL.md", ".claude/agent-usage.md", ".claude/settings.local.json (deny rules)"],
+        "written": written,
         "deny_rules_added": deny_added,
         "AGENTS.md": agents_md,
         "gitignore_added": added_ignores,
@@ -451,7 +537,10 @@ def cmd_install(args):
         "verify": checks_result,
         "base_branch": base,
         "uncommitted_next_step": "git add factory AGENTS.md .gitignore && git commit -m 'Add software factory'",
-    }, indent=2))
+    }
+    if rtk_status in ("wired", "already-global"):
+        result["rtk"] = rtk_status
+    print(json.dumps(result, indent=2))
     if any(v != "ok" for v in checks_result.values()):
         sys.exit(1)
 
