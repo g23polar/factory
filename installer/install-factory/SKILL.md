@@ -82,7 +82,7 @@ python3 ~/.claude/skills/install-factory/scripts/install_factory.py install <rep
 
 It writes:
 
-- `factory/`: `bin/{job,gate,route,locked,job-watch}`, `dashboard.html`, `tests/`, a generated `config.json`
+- `factory/`: `bin/{job,gate,route,locked,job-watch,job-diff}`, `dashboard.html`, `tests/`, a generated `config.json`
   and `checks.sh`, and `install.json` (the source snapshot and installer version)
 - `.claude/agents/`: the 8 factory agents (`intake`, `spec-writer`, `builder`,
   `approver`, `reviewer-code`, `reviewer-security`, `reviewer-ux`, `reviewer-ui`)
