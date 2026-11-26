@@ -150,10 +150,18 @@ class FactoryV2Test(unittest.TestCase):
     def test_new_scripts_are_installed_executable(self):
         repo = make_repo()
         install(repo)
-        for name in ("locked", "job-watch"):
+        for name in ("locked", "job-watch", "job-diff"):
             self.assertTrue(os.access(repo / "factory/bin" / name, os.X_OK), name)
-        for name in ("test_orca_view.py", "test_orca_workers.py", "test_blockers.py"):
+        for name in ("test_orca_view.py", "test_orca_workers.py", "test_blockers.py", "test_job_diff.py"):
             self.assertTrue((repo / "factory/tests" / name).exists(), name)
+
+    def test_reviewers_and_approver_read_the_diff_from_job_diff(self):
+        repo = make_repo()
+        install(repo)
+        for name in ("reviewer-code", "reviewer-security", "reviewer-ux", "reviewer-ui", "approver"):
+            text = (repo / ".claude/agents" / f"{name}.md").read_text()
+            self.assertIn("factory/bin/job-diff", text, name)
+            self.assertNotIn("git diff <base>...HEAD", text, name)
 
     def test_locked_checks_run_through_bin_locked(self):
         repo = make_repo()

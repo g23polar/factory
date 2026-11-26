@@ -307,7 +307,7 @@ def write_config(answers, base_branch):
 
 def copy_factory_files(repo, force):
     fdir = repo / "factory"
-    for name in ("job", "gate", "route", "locked", "job-watch"):
+    for name in ("job", "gate", "route", "locked", "job-watch", "job-diff"):
         dst = fdir / "bin" / name
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(TEMPLATE / "factory" / "bin" / name, dst)
@@ -439,7 +439,7 @@ def cmd_install(args):
 
     print(json.dumps({
         "repo": str(repo),
-        "written": ["factory/bin/{job,gate,route,locked,job-watch}", "factory/dashboard.html", "factory/tests/",
+        "written": ["factory/bin/{job,gate,route,locked,job-watch,job-diff}", "factory/dashboard.html", "factory/tests/",
                     "factory/config.json", "factory/checks.sh", "factory/install.json",
                     ".claude/agents/ (8 factory agents)", ".claude/skills/factory/SKILL.md",
                     ".claude/skills/catchup/SKILL.md", ".claude/agent-usage.md", ".claude/settings.local.json (deny rules)"],
