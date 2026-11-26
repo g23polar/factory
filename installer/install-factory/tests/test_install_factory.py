@@ -152,7 +152,7 @@ class FactoryV2Test(unittest.TestCase):
         install(repo)
         for name in ("locked", "job-watch"):
             self.assertTrue(os.access(repo / "factory/bin" / name, os.X_OK), name)
-        for name in ("test_orca_view.py", "test_orca_workers.py"):
+        for name in ("test_orca_view.py", "test_orca_workers.py", "test_blockers.py"):
             self.assertTrue((repo / "factory/tests" / name).exists(), name)
 
     def test_locked_checks_run_through_bin_locked(self):
@@ -207,6 +207,13 @@ class FactoryV2Test(unittest.TestCase):
         for text in ("orca orchestration check --run <run> --wait --timeout-ms 3600000 --json",
                      "run_in_background", "orca orchestration run-current --json", "timedOut"):
             self.assertIn(text, skill)
+
+    def test_skill_documents_blocked_issues(self):
+        repo = make_repo()
+        install(repo)
+        skill = (repo / ".claude/skills/factory/SKILL.md").read_text()
+        self.assertIn("`blocked`", skill)
+        self.assertIn("blocked", (repo / ".claude/skills/catchup/SKILL.md").read_text())
 
     def test_detect_reports_orca(self):
         repo = make_repo()
