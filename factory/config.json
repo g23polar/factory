@@ -33,7 +33,7 @@
     "factory/checks.sh",
     "factory/config.json",
     "factory/bin/*",
-    "factory/tests/*"
+    "factory/tests/*", "factory/install.json", ".rtk/**"
   ],
   "ports": {
     "base": 5100,
