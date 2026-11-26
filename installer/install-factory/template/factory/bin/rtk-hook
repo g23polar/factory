@@ -7,7 +7,9 @@ as written) unless all of these hold:
 
 - the tool is Bash and the session's permission_mode is bypassPermissions, so
   intake (dontAsk) and interactive sessions are never touched;
-- factory/install.json names an executable rtk_path;
+- factory/install.json names an executable rtk_path that is absolute, is named
+  rtk and lies outside this repo, so a committed change can't point it at a
+  script (a job branch could edit install.json);
 - no segment of the command deletes (rm, rmdir, unlink, -delete), prints a full
   diff (git diff/show, git log -p, gh pr diff) or runs orca or factory/bin/*;
 - `rtk hook claude` exits 0 with a JSON object.
@@ -95,7 +97,11 @@ def rtk_path():
         path = json.loads((REPO / "factory" / "install.json").read_text()).get("rtk_path")
     except (OSError, ValueError, AttributeError):
         return None
-    return path if isinstance(path, str) and os.path.isfile(path) and os.access(path, os.X_OK) else None
+    if not isinstance(path, str) or not os.path.isabs(path) or Path(path).name != "rtk":
+        return None
+    if Path(path).resolve().is_relative_to(REPO):
+        return None
+    return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
 
 
 def decide(raw):

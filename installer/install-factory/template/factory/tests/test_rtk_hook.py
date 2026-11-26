@@ -32,6 +32,11 @@ import json
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                   "permissionDecisionReason": "denied by fake"}}))
 """
+# Leaves <its path>.ran behind, so a test can tell whether the wrapper ran it.
+FAKE_RTK_MARKS = """#!/bin/sh
+touch "$0.ran"
+echo '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": {"command": "rtk x"}}}'
+"""
 FAKE_RTK_FAILS = "#!/bin/sh\necho '{}'\nexit 1\n"
 FAKE_RTK_JUNK = "#!/bin/sh\necho 'not json'\n"
 
@@ -122,6 +127,27 @@ class FakeRtkTest(unittest.TestCase):
         for name in ("fails", "junk"):
             with self.subTest(fake=name):
                 self.assertEqual(Layout(self, self.fakes[name]).run(event("git status")), "")
+
+    def test_untrusted_rtk_path_is_never_run(self):
+        outside = Path(tempfile.mkdtemp(prefix="fake-rtk-"))
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        for name in ("rtk", "sh"):
+            (outside / name).write_text(FAKE_RTK_MARKS)
+            (outside / name).chmod(0o755)
+        cases = {"relative": ("rtk", outside), "not named rtk": (outside / "sh", REPO)}
+        for label, (rtk, cwd) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(Layout(self, rtk).run(event("git status"), cwd=cwd), "")
+        with self.subTest("inside the repo"):
+            layout = Layout(self, None)
+            inside = layout.root / "hook" / "rtk"
+            inside.parent.mkdir()
+            inside.write_text(FAKE_RTK_MARKS)
+            inside.chmod(0o755)
+            (layout.root / "factory" / "install.json").write_text(json.dumps({"rtk_path": str(inside)}))
+            self.assertEqual(layout.run(event("git status")), "")
+            self.assertFalse(Path(f"{inside}.ran").exists())
+        self.assertEqual(sorted(p.name for p in outside.glob("*.ran")), [])
 
     def test_deny_is_forwarded(self):
         out = json.loads(Layout(self, self.fakes["deny"]).run(event("git status")))
