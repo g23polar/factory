@@ -1017,7 +1017,10 @@ def cmd_merge(job):
         if gh_json("pr", "view", str(job["pr"]), "--json", "isDraft")["isDraft"]:
             gh("pr", "ready", str(job["pr"]))
         # Merge only the commit that was just gated, never a later push.
-        gh("pr", "merge", str(job["pr"]), f"--{CONFIG['merge_method']}", "--match-head-commit", head)
+        # merge_admin: use the admin's ruleset bypass (a solo maintainer can't
+        # approve their own PR). Only works for a gh login with admin rights.
+        admin = ["--admin"] if CONFIG.get("merge_admin") else []
+        gh("pr", "merge", str(job["pr"]), f"--{CONFIG['merge_method']}", *admin, "--match-head-commit", head)
     except Refused as e:
         return fail(f"The merge failed:\n\n```\n{e}\n```")
     # GitHub may already have deleted the branch on merge.

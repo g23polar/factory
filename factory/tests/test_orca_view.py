@@ -148,6 +148,7 @@ class MergeMatchesHeadTest(unittest.TestCase):
     def test_merge_pins_the_gated_commit(self):
         mod = load("job")
         calls = []
+        mod.CONFIG = dict(mod.CONFIG, merge_admin=False)
         mod.sync = lambda j: j
         mod.save = lambda j: None
         mod.advance = lambda j, stage: j
@@ -159,6 +160,25 @@ class MergeMatchesHeadTest(unittest.TestCase):
         mod.subprocess = type("S", (), {"run": staticmethod(lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))})
         mod.cmd_merge({"id": "004-x", "stage": "merging", "pr": 30, "branch": "factory/004-x", "round": 1})
         merge = next(c for c in calls if c[:2] == ("pr", "merge"))
+        self.assertEqual(merge[merge.index("--match-head-commit") + 1], "abc123")
+        self.assertNotIn("--admin", merge)
+
+    def test_merge_uses_admin_bypass_when_configured(self):
+        mod = load("job")
+        calls = []
+        mod.CONFIG = dict(mod.CONFIG, merge_admin=True)
+        mod.sync = lambda j: j
+        mod.save = lambda j: None
+        mod.advance = lambda j, stage: j
+        mod.auto_merge_blockers = lambda j: []
+        mod.git = lambda j, *a, check=True: subprocess.CompletedProcess(a, 0, stdout="abc123\n", stderr="")
+        mod.gh = lambda *a: calls.append(a) or ""
+        mod.gh_json = lambda *a: {"isDraft": False}
+        mod.pr_state = lambda j: "OPEN"
+        mod.subprocess = type("S", (), {"run": staticmethod(lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))})
+        mod.cmd_merge({"id": "004-x", "stage": "merging", "pr": 30, "branch": "factory/004-x", "round": 1})
+        merge = next(c for c in calls if c[:2] == ("pr", "merge"))
+        self.assertIn("--admin", merge)
         self.assertEqual(merge[merge.index("--match-head-commit") + 1], "abc123")
 
 

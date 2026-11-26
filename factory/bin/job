@@ -8,7 +8,8 @@ orchestrator never improvises them.
 
 Usage:
   job queue                      what /factory run should do with each labeled issue
-  job create <issue>             new job for an open `factory` issue, with its worktree; prints the job id
+  job create <issue>             new job for an open `factory` issue, with its worktree; prints the job id.
+                                 Refuses an issue GitHub lists as blocked by an open issue in this repo
   job spawn <job> <agent> [--model M]   start a factory agent in its own Orca tab (task on stdin)
   job send <job> <agent>         give a running agent its next task, e.g. the builder's next round (stdin)
   job advance <job> <stage>      move a job to <stage>, or refuse
@@ -98,6 +99,35 @@ def operator():
     if _operator is None:
         _operator = gh("api", "user", "--jq", ".login").strip()
     return _operator
+
+
+_repo = None
+
+
+def this_repo():
+    """owner/name of the GitHub repository this checkout belongs to."""
+    global _repo
+    if _repo is None:
+        _repo = gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
+    return _repo
+
+
+def open_blockers(number):
+    """Open issues in this repo that GitHub's "Blocked by" dependencies list for
+    issue <number>, sorted. Reads only the dependency API, never the issue's text.
+    A failed lookup raises Refused: callers fail closed."""
+    try:
+        deps = gh_json("api", f"repos/{{owner}}/{{repo}}/issues/{number}/dependencies/blocked_by?per_page=100")
+        require(isinstance(deps, list), f"expected a list, got {type(deps).__name__}")
+        suffix = f"/repos/{this_repo()}".lower()
+        return sorted(d["number"] for d in deps
+                      if d["state"] == "open" and d["repository_url"].lower().endswith(suffix))
+    except (Refused, ValueError, TypeError, KeyError, AttributeError) as e:
+        raise Refused(f"couldn't read blockers: {e}") from e
+
+
+def issue_refs(numbers):
+    return ", ".join(f"#{n}" for n in numbers)
 
 
 # ---- Job files -------------------------------------------------------------
@@ -537,6 +567,9 @@ def advance(job, stage):
             refresh_base(job)
 
     elif old == "needs-info":
+        blockers = open_blockers(job["issue"])
+        require(not blockers, f"issue #{job['issue']} is blocked by {issue_refs(blockers)}; "
+                              "close them or remove the link on GitHub first")
         require_slot(job["id"])
         k = len(list(d.glob("intake-*.md"))) + 1
         (d / "intake.md").rename(d / f"intake-{k}.md")
@@ -664,6 +697,12 @@ def cmd_create(number):
         die(f"issue #{number} is {issue['state'].lower()}")
     if LABELS["queue"] not in {l["name"] for l in issue["labels"]}:
         die(f"issue #{number} isn't labeled {LABELS['queue']}")
+    try:
+        blockers = open_blockers(number)
+    except Refused as e:
+        die(f"issue #{number}: {e}")
+    if blockers:
+        die(f"issue #{number} is blocked by {issue_refs(blockers)}; close them or remove the link on GitHub first")
     JOBS.mkdir(parents=True, exist_ok=True)
     numbers = [int(p.name.split("-")[0]) for p in JOBS.iterdir() if p.name[:3].isdigit()]
     job_id = f"{max(numbers, default=0) + 1:03d}-{slugify(issue['title'])}"
@@ -809,9 +848,34 @@ def cmd_send(job, agent, task):
     print(f"{job['id']}: sent round {job['round']} to {d['title']} (dispatch:{d['dispatch']})")
 
 
+def blocker_cycles(edges):
+    """The first cycle through each issue in `edges` (issue → its open blockers),
+    as [issue, ..., issue]. Only issues whose blockers were fetched can be on one."""
+    cycles = {}
+    for start in sorted(edges):
+        paths, seen = [[start]], {start}
+        while paths and start not in cycles:
+            longer = []
+            for path in paths:
+                for b in edges[path[-1]]:
+                    if b == start:
+                        cycles[start] = path + [start]
+                        break
+                    if b in edges and b not in seen:
+                        seen.add(b)
+                        longer.append(path + [b])
+                if start in cycles:
+                    break
+            paths = longer
+    return cycles
+
+
 def cmd_queue():
     """Rows in the order to start them. `resume` and `new` rows fit in the
-    concurrency slots; the rest show as `hold` until a running job finishes."""
+    concurrency slots; the rest show as `hold` until a running job finishes.
+    An issue that could start but has an open blocker on GitHub (or whose
+    blockers couldn't be read) is `blocked`: it takes no slot. A running job
+    with a late blocker keeps going, with a note."""
     jobs = {j["issue"]: j for j in all_jobs()}
     # A job is done once its PR is merged on GitHub, which also closes the issue.
     for j in jobs.values():
@@ -821,13 +885,23 @@ def cmd_queue():
                      "--limit", "200", "--json", "number,title")
     open_numbers = {i["number"] for i in issues}
     running_rows, replied_rows, new_rows, other_rows = [], [], [], []
+    blockers, unreadable = {}, {}
+
+    def lookup(n):
+        try:
+            blockers[n] = open_blockers(n)
+        except Refused as e:
+            unreadable[n] = str(e)
+
     for issue in sorted(issues, key=lambda i: i["number"]):
         n = issue["number"]
         j = jobs.get(n)
         if not j:
+            lookup(n)
             new_rows.append(("new", n, "-", "-", issue["title"]))
         elif j["stage"] == "needs-info":
             if replied_since_question(fetch_issue(n)):
+                lookup(n)
                 replied_rows.append(("resume", n, j["id"], j["stage"], "author replied"))
             else:
                 other_rows.append(("wait", n, j["id"], j["stage"], "waiting for the author"))
@@ -839,20 +913,34 @@ def cmd_queue():
         elif j["stage"] == "merged":
             other_rows.append(("skip", n, j["id"], j["stage"], "merged"))
         else:
+            lookup(n)
             running_rows.append(("resume", n, j["id"], j["stage"], f"round {j['round']}"))
     for n, j in sorted(jobs.items()):
         if n not in open_numbers and j["stage"] not in TERMINAL | WAITING:
             other_rows.append(("skip", n, j["id"], j["stage"], f"issue is closed or no longer labeled {LABELS['queue']}"))
+    cycles = blocker_cycles(blockers)
+
+    def blocked_by(n):
+        note = f"blocked by {issue_refs(blockers[n])}"
+        return note + (f" (cycle: {' → '.join(f'#{c}' for c in cycles[n])})" if n in cycles else "")
+
     # Jobs already in a running stage hold a slot whether or not an agent is on them.
     slots = CONCURRENCY - len(running(jobs.values()))
-    rows = list(running_rows)
+    rows = [row[:4] + (f"{row[4]}; blocked by {issue_refs(blockers[row[1]])} (added after start)",)
+            if blockers.get(row[1]) else row for row in running_rows]
+    blocked_rows = []
     for row in replied_rows + new_rows:
-        if slots > 0:
+        n, replied = row[1], "author replied; " if row[0] == "resume" else ""
+        if n in unreadable:
+            blocked_rows.append(("blocked",) + row[1:4] + (replied + unreadable[n],))
+        elif blockers[n]:
+            blocked_rows.append(("blocked",) + row[1:4] + (replied + blocked_by(n),))
+        elif slots > 0:
             rows.append(row)
             slots -= 1
         else:
             rows.append(("hold",) + row[1:4] + (f"concurrency {CONCURRENCY} reached",))
-    for row in rows + other_rows:
+    for row in rows + sorted(blocked_rows, key=lambda r: r[1]) + other_rows:
         print("\t".join(str(c) for c in row))
 
 
@@ -929,7 +1017,10 @@ def cmd_merge(job):
         if gh_json("pr", "view", str(job["pr"]), "--json", "isDraft")["isDraft"]:
             gh("pr", "ready", str(job["pr"]))
         # Merge only the commit that was just gated, never a later push.
-        gh("pr", "merge", str(job["pr"]), f"--{CONFIG['merge_method']}", "--match-head-commit", head)
+        # merge_admin: use the admin's ruleset bypass (a solo maintainer can't
+        # approve their own PR). Only works for a gh login with admin rights.
+        admin = ["--admin"] if CONFIG.get("merge_admin") else []
+        gh("pr", "merge", str(job["pr"]), f"--{CONFIG['merge_method']}", *admin, "--match-head-commit", head)
     except Refused as e:
         return fail(f"The merge failed:\n\n```\n{e}\n```")
     # GitHub may already have deleted the branch on merge.
