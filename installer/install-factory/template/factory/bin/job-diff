@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Write a job's full change to a file, so agents read it with Read, not Bash.
+
+Usage:
+  job-diff <job-id>    write <job folder>/diff.patch and print `<path>: <N> lines`
+
+The file holds the commit list (`git log --oneline origin/<base>..HEAD`) and the
+full patch (`git diff origin/<base>...HEAD`) of the job's worktree, byte for
+byte. Bash output can be cut silently, by an output-rewriting hook such as rtk
+or by Bash's own limit; a file read with Read in pages can't. Git runs with an
+argv list and no shell, so no hook sees it. The file is replaced atomically and
+the job's lock isn't taken, so several reviewers can run this at once.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+FACTORY = REPO / "factory"
+JOBS = FACTORY / "jobs"
+
+
+def die(msg):
+    print(f"job-diff: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def git(worktree, *args):
+    env = {**os.environ, "GIT_PAGER": "cat"}
+    res = subprocess.run(["git", *args], cwd=worktree, env=env, capture_output=True)
+    if res.returncode != 0:
+        die(f"`git {' '.join(args)}` failed: {res.stderr.decode(errors='replace').strip()}")
+    return res.stdout
+
+
+def job_diff(job_id):
+    if not job_id or job_id in (".", "..") or Path(job_id).name != job_id:
+        die(f"no job {job_id!r}")
+    folder = JOBS / job_id
+    path = folder / "job.json"
+    if not path.is_file():
+        die(f"no job {job_id}")
+    job = json.loads(path.read_text())
+    base = f"origin/{json.loads((FACTORY / 'config.json').read_text())['base_branch']}"
+    worktree = job["worktree"]
+    commits = git(worktree, "log", "--oneline", "--no-decorate", "--no-color", f"{base}..HEAD")
+    patch = git(worktree, "diff", "--no-color", "--no-ext-diff", "--no-textconv", f"{base}...HEAD")
+    data = (f"# Commits ({base}..HEAD)\n".encode() + commits
+            + f"# Diff ({base}...HEAD)\n".encode() + patch)
+
+    out = folder / "diff.patch"
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".diff.patch.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, out)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    lines = data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
+    print(f"{out}: {lines} lines")
+
+
+def main(argv):
+    if len(argv) != 1:
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(2)
+    job_diff(argv[0])
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
