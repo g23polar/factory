@@ -24,7 +24,9 @@ them together.
 2. `for f in factory/jobs/*/job.json; do jq -c '{id, issue, title, stage, round, pr, gate, reviews, cost_usd, started, ended}' "$f"; done`
    Keep the jobs whose `started` or `ended` is after `SINCE`, plus every job
    not in `merged` or `rejected`.
-3. `factory/bin/job queue`: what runs next and what waits (`wait` lines).
+3. `factory/bin/job queue`: what runs next and what waits (`wait` lines, and
+   `blocked` lines: issues GitHub lists as blocked by an open issue, with the
+   blockers in the note).
 4. `gh issue list --state all --search "updated:>=SINCE" --json number,title,state,labels,assignees`
    and `gh pr list --state all --search "updated:>=SINCE" --json number,title,state,mergedAt,isDraft`.
 5. `git fetch -q origin && git log --oneline --since="SINCE" origin/HEAD`: what
@@ -52,4 +54,5 @@ unless there are more than four jobs. Leave out a section that is empty.
 4. **Failed or rejected**: gate failures, rejections, round budgets used up.
 5. **Cost**: the window's factory spend (sum of `cost_usd` for the jobs above).
 
-End with one line on what `/factory run` would start next, from the queue.
+End with one line on what `/factory run` would start next, from the queue,
+naming any `blocked` issues and their blockers.
