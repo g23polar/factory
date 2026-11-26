@@ -242,11 +242,17 @@ then moves the job to `merged`, which closes its tabs and removes its worktree.
 
 1. Run `factory/bin/job queue`. Each line is `action  issue  job  stage  note`:
    `resume` (pick it up from its stage), `new` (no job yet), `hold` (no free
-   slot), `wait` (needs the author or you) or `skip`. The script enforces
-   `concurrency`: every job in a running stage holds a slot, and only as many
-   `new` and replied `needs-info` lines as there are free slots come out as
-   `new` or `resume`; the rest are `hold`. `job create` and the
+   slot), `blocked`, `wait` (needs the author or you) or `skip`. The script
+   enforces `concurrency`: every job in a running stage holds a slot, and only
+   as many `new` and replied `needs-info` lines as there are free slots come
+   out as `new` or `resume`; the rest are `hold`. `job create` and the
    `needs-info → intake` move refuse when no slot is free.
+   `blocked` is an open issue that GitHub lists as "Blocked by" an open issue
+   in this repo (its note names the blockers, and any cycle), or whose blockers
+   couldn't be read. It takes no slot and is never started: `job create` and
+   the `needs-info → intake` move refuse it. It comes back as `new` or `resume`
+   once every blocker is closed. A running job that gains a blocker keeps
+   going; its note only says `blocked by #<n> (added after start)`.
 2. Start every `resume` and `new` line, nothing else. Don't judge issues
    yourself: every new issue goes to intake, which decides whether it gets
    built. For a new issue, `factory/bin/job create <n>` prints the job id;
@@ -255,8 +261,9 @@ then moves the job to `merged`, which closes its tabs and removes its worktree.
    `resume` lines you aren't already running and its `new` lines.
 4. When nothing is queued or running, print `factory/bin/job summary <ids>`
    for the jobs this run touched, then list what waits on a human: PRs to
-   review (merge one to approve it, or give feedback with `/factory`) and
-   questions waiting on authors. Then run
+   review (merge one to approve it, or give feedback with `/factory`),
+   questions waiting on authors, and each `blocked` issue with its blockers
+   (the line's note). Then run
    `factory/bin/job notify - "run settled: <n> jobs, <k> waiting on you"`.
 
 **Resuming.** State lives in files, so a new session picks up where a dead one
@@ -276,8 +283,9 @@ mail they already sent.
 ## /factory run <n>
 
 Run one issue with the same steps. If `factory/bin/job queue` shows a job for
-it, resume that job; otherwise `factory/bin/job create <n>`. Finish with the
-summary line for that job.
+it, resume that job; otherwise `factory/bin/job create <n>`. If `job create`
+or `job advance` refuses because the issue is blocked, report its blockers
+from the error and stop. Finish with the summary line for that job.
 
 ## /factory hack
 
