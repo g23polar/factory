@@ -28,7 +28,11 @@ python3 ~/.claude/skills/install-factory/scripts/install_factory.py detect <repo
 ```
 
 It prints JSON: `is_git`, `origin`, `gh_authenticated`, `base_branch`,
-`existing_factory`, `agents_md`, `stacks`, `proposed_checks`, `needs_input`, `warnings`.
+`existing_factory`, `agents_md`, `stacks`, `proposed_checks`, `needs_input`, `warnings`,
+and `rtk`: `{"installed", "path", "version", "global_hook"}`. rtk counts as installed only
+when `rtk --version` and `rtk gain` both succeed. `global_hook` is true when the user's
+`~/.claude/settings.json` or `settings.local.json` already runs `rtk hook claude`.
+A missing rtk is not a warning.
 
 Act on the warnings before asking anything else:
 
@@ -58,6 +62,9 @@ waiting for each answer:
 3. **Escalate paths.** Ask which paths must always wait for a human, for example
    `src/payments/*`. Default: none. These go into `auto_merge.escalate_paths`.
 4. **Max risk for auto-merge.** Default `low`. Ask only if the user wants to change it.
+5. **rtk.** Ask only when `detect` reports `rtk.installed`: "Route agent shell commands
+   through rtk to cut tool-output tokens?" Default no. If `rtk.global_hook` is true, say
+   that the user's own rtk hook already applies, so only the rtk deny rules will be added.
 
 Don't ask about base branch, concurrency or rounds. Use the defaults and say so.
 
@@ -71,7 +78,8 @@ Write the answers to the scratchpad, then install:
              {"label": "lint", "cmd": "ruff check .", "limit": 120}],
   "project_line": "One sentence from step 2.",
   "escalate_paths": [],
-  "max_risk": "low"
+  "max_risk": "low",
+  "rtk": false
 }
 ```
 
@@ -82,8 +90,13 @@ python3 ~/.claude/skills/install-factory/scripts/install_factory.py install <rep
 
 It writes:
 
-- `factory/`: `bin/{job,gate,route,locked,job-watch,job-diff}`, `dashboard.html`, `tests/`, a generated `config.json`
-  and `checks.sh`, and `install.json` (the source snapshot and installer version)
+- `factory/`: `bin/{job,gate,route,locked,job-watch,job-diff,rtk-hook}`, `dashboard.html`, `tests/`, a generated
+  `config.json` (its `protected_paths` include `.rtk/**`) and `checks.sh`, and `install.json` (the source
+  snapshot, installer version and rtk status: `absent`, `declined`, `wired` or `already-global`)
+- `factory/bin/rtk-hook`: always installed, and inert unless `install.json` has an `rtk_path`.
+  A PreToolUse wrapper around `rtk hook claude`: it acts only in `bypassPermissions` sessions
+  (never intake), passes deletes, full diffs, `orca` and `factory/bin/*` through unrewritten, and
+  forwards only rtk's rewrite or deny, never an allow or ask.
 - `.claude/agents/`: the 8 factory agents (`intake`, `spec-writer`, `builder`,
   `approver`, `reviewer-code`, `reviewer-security`, `reviewer-ux`, `reviewer-ui`)
 - `.claude/skills/factory/SKILL.md`, the `/factory` orchestrator
@@ -92,7 +105,10 @@ It writes:
 - `.claude/settings.local.json`: baseline deny rules for `rm`, `rmdir`, `unlink` and
   `find -delete`, merged in (never removed). Agents run as their own sessions in
   bypass mode, except intake (`dontAsk`, allowed only to read, write `intake.md` and
-  report `worker_done`), so these rules are their guard.
+  report `worker_done`), so these rules are their guard. When the rtk answer is yes, also
+  the rtk deny rules (`rtk find … -delete`, `find … -delete` anywhere, `rtk run`, `rtk proxy`)
+  and, unless the user already has a user-level rtk hook, a `PreToolUse` hook entry for `Bash`
+  that runs `factory/bin/rtk-hook` by absolute path. Each is added once; nothing is removed.
 - `AGENTS.md`: a "Software factory" section appended, or created if missing
 - `.gitignore`: `.claude`, `CLAUDE.md`, `/factory/jobs/`, `/.worktrees/`, each added once
 - GitHub labels `factory`, `factory:needs-info` and `factory:needs-human`, unless `--no-labels`
@@ -134,6 +150,9 @@ and `factory/bin/job summary`. Exit 0 means all three passed. Read the JSON outp
 - **Deny rules are a guard, not a sandbox.** They match command text, so
   `bash -c 'rm …'` or `/bin/rm` can slip past them. Intake, the agent that reads
   untrusted issue text, is the one held to an allowlist.
+- **rtk wiring is add-only.** Answering no on a re-run never removes a hook or deny rule
+  added earlier; edit `.claude/settings.local.json` by hand. A user-level rtk hook isn't
+  managed or filtered by the factory: it rewrites every session's commands, intake included.
 - **Orca-specific.** Spawning, the agent tabs and the orchestrator's wake-ups all go
   through the `orca` CLI. Without Orca the factory can't dispatch agents.
 - **Upstream vs local.** The template carries local changes to the

@@ -59,6 +59,7 @@ Requirements:
 - [Orca](https://github.com/stablyai/orca). The factory dispatches each agent as an Orca worker in its own tab.
 - A GitHub repository with an `origin` remote, and [`gh`](https://cli.github.com/) authenticated (`gh auth login`)
 - `git`, `bash`, `python3`
+- Optional: [rtk](https://github.com/rtk-ai/rtk). If it's installed, the installer asks whether to use it (default no).
 
 The installer is a Claude Code skill. Install it once per machine:
 
@@ -144,11 +145,16 @@ A job gets at most `max_rounds` build → gate → review rounds before it goes 
 - **Quick changes.** `/factory hack` skips intake, spec, review and the PR, so the change
   lands on the base branch unreviewed. Only you can start one, it must pass `checks.sh`, and
   branch protection refuses it like any direct push.
-- **Protected factory.** No job can change `factory/bin/`, `factory/tests/`, `checks.sh` or `config.json`.
+- **Protected factory.** No job can change `factory/bin/`, `factory/tests/`, `checks.sh`, `config.json` or `.rtk/**`.
 - **Audit trail.** Every decision is written to a file in the job folder and to the issue or PR.
 - **Shared-resource locks.** Checks that share a resource are serialized across all worktrees.
 - **Baseline guardrails.** Deny rules for `rm`, `rmdir`, `unlink` and `find -delete` are merged into the agents' settings.
 - **Dashboard.** Run `cd factory && python3 -m http.server`, then open `http://localhost:8000/dashboard.html`.
+- **Optional rtk.** Agent shell output can be compressed through rtk via a filtering wrapper hook
+  (`factory/bin/rtk-hook`) that never auto-approves a command. It leaves intake, deletes, full diffs
+  and the factory's own commands alone. Run `rtk gain --project` to see the savings. rtk keeps a
+  command history and copies of failing command output in its own data directory, and the factory
+  never runs `rtk trust`.
 
 ## Configuration
 
