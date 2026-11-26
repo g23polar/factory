@@ -503,10 +503,11 @@ class RtkTest(unittest.TestCase):
         self.assertTrue(set(RTK_DENY) <= set(settings["permissions"]["deny"]))
         self.assertEqual(json.loads(res.stdout)["rtk"], "already-global")
 
-    def test_config_protects_rtk_dir(self):
+    def test_config_protects_rtk_dir_and_install_json(self):
         repo, _ = self.install(GOOD_ANSWERS, env=self.env(rtk=False))
         config = json.loads((repo / "factory/config.json").read_text())
         self.assertIn(".rtk/**", config["protected_paths"])
+        self.assertIn("factory/install.json", config["protected_paths"])
 
     def test_wrapper_installed_even_when_absent(self):
         repo, _ = self.install(GOOD_ANSWERS, env=self.env(rtk=False))

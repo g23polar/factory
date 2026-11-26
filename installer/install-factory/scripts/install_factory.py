@@ -347,7 +347,7 @@ def write_config(answers, base_branch):
         "routing": {"low": {"code": "opus"}, "medium": {"code": "opus"}, "high": {"code": "opus"}},
         "surface_reviewers": {"ui": {"ux": "sonnet", "ui": "opus"}, "security": {"security": "opus"}},
         "protected_paths": ["factory/checks.sh", "factory/config.json", "factory/bin/*", "factory/tests/*",
-                            ".rtk/**"],
+                            "factory/install.json", ".rtk/**"],
         "ports": {"base": 5100, "step": 10},
         "prices_usd_per_mtok": PRICES,
         "auto_merge": {

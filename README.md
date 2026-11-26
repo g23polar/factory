@@ -145,7 +145,7 @@ A job gets at most `max_rounds` build → gate → review rounds before it goes 
 - **Quick changes.** `/factory hack` skips intake, spec, review and the PR, so the change
   lands on the base branch unreviewed. Only you can start one, it must pass `checks.sh`, and
   branch protection refuses it like any direct push.
-- **Protected factory.** No job can change `factory/bin/`, `factory/tests/`, `checks.sh`, `config.json` or `.rtk/**`.
+- **Protected factory.** No job can change `factory/bin/`, `factory/tests/`, `checks.sh`, `config.json`, `install.json` or `.rtk/**`.
 - **Audit trail.** Every decision is written to a file in the job folder and to the issue or PR.
 - **Shared-resource locks.** Checks that share a resource are serialized across all worktrees.
 - **Baseline guardrails.** Deny rules for `rm`, `rmdir`, `unlink` and `find -delete` are merged into the agents' settings.

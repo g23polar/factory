@@ -91,9 +91,10 @@ python3 ~/.claude/skills/install-factory/scripts/install_factory.py install <rep
 It writes:
 
 - `factory/`: `bin/{job,gate,route,locked,job-watch,job-diff,rtk-hook}`, `dashboard.html`, `tests/`, a generated
-  `config.json` (its `protected_paths` include `.rtk/**`) and `checks.sh`, and `install.json` (the source
+  `config.json` (its `protected_paths` include `factory/install.json` and `.rtk/**`) and `checks.sh`, and `install.json` (the source
   snapshot, installer version and rtk status: `absent`, `declined`, `wired` or `already-global`)
 - `factory/bin/rtk-hook`: always installed, and inert unless `install.json` has an `rtk_path`.
+  It runs that path only if it is absolute, named `rtk` and outside the repo.
   A PreToolUse wrapper around `rtk hook claude`: it acts only in `bypassPermissions` sessions
   (never intake), passes deletes, full diffs, `orca` and `factory/bin/*` through unrewritten, and
   forwards only rtk's rewrite or deny, never an allow or ask.
